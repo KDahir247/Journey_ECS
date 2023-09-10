@@ -10,13 +10,18 @@ import "core:mem"
 // So inserting will add to the last and won't enter the iteration (since it at the end)
 // and removing the currently iterate will be swap by the last which won't invalidate the iteration (removing must be done at the end after manipulation)
 // Or should i pass the responsiblity to the user where user have to use  #reverse on iteration on dense.
+//TODO:Khal should I take into account of user adding or removing component while iterating over it
+// If so then we need to find a way to handle invalidation. One way is to iterate from last to first
+// So inserting will add to the last and won't enter the iteration (since it at the end)
+// and removing the currently iterate will be swap by the last which won't invalidate the iteration (removing must be done at the end after manipulation)
+// Or should i pass the responsiblity to the user where user have to use  #reverse on iteration on dense.
+
 
 ////////////////////////////// ECS Constant /////////////////////////////
 
 DEFAULT_CAPACITY :: 32
 DEFAULT_COMPONENT_SPARSE :: 32
 DEFAULT_GROUP :: 32
-
 
 ////////////////////////////// ECS Resource ////////////////////////////
 Resources :: struct{
@@ -67,7 +72,6 @@ subgroup_registry :: proc(world : $W/^$World, component_groups : ..ComponentGrou
 
 group_registry :: proc(world : $W/^$World, component_ids : []typeid)
 {
-    //TODO:khal handle case where the user put only one type if so then it is just a normal register
     internal_register_group(&world.component_stores,component_ids)
 }
 
@@ -311,7 +315,6 @@ internal_register_group :: proc(component_store : $C/^$ComponentStore, component
 
 @(private)
 internal_register_component :: #force_inline proc(component_store : $C/^$ComponentStore, $component_type : typeid){
-    component_size :: size_of(component_type)
 
     if component_type not_in component_store.component_info{
 
@@ -319,7 +322,7 @@ internal_register_component :: #force_inline proc(component_store : $C/^$Compone
             sparse_index = len(component_store.component_sparse),
         }
 
-        component_sparse := init_component_sparse(component_size)
+        component_sparse := init_component_sparse(component_type)
         append(&component_store.component_sparse, component_sparse)
 
     }
@@ -341,7 +344,7 @@ internal_add_component_group :: proc(component_store : $C/^$ComponentStore, #any
     internal_sparse_push(&component_store.component_sparse[component_info.sparse_index], entity, component)
 
     //////////////////////////// Grouping //////////////////////////
-    for group_sparse_id in group.indices{ //
+     for group_sparse_id in group.indices{ //
         valid_group_add &= internal_sparse_has(&component_store.component_sparse[group_sparse_id], entity)
     }
 
@@ -411,7 +414,7 @@ internal_remove_component_group :: proc(component_store : $C/^$ComponentStore, #
     }
 
     if valid_sub_group_remove == 1{
-        for group_id in sub_group.indices{
+         for group_id in sub_group.indices{
             group_sparse_indices := component_store.groups[group_id].indices
             for group_sparse_id in group_sparse_indices{
                 group_sparse := component_store.component_sparse[group_sparse_id]
@@ -449,10 +452,9 @@ internal_remove_component_group :: proc(component_store : $C/^$ComponentStore, #
 deinit_component_store :: proc(component_store : $C/^$ComponentStore){
     //TODO: optimize if possible it has a high cpi even on optimization
 
-    for comp in component_store.component_sparse{ 
-        free(comp.component_blob)
-        free(comp.entity_blob)
-        free(comp.sparse_blob)
+
+    for comp in component_store.component_sparse{
+        deinit_component_sparse(comp)
     }
 
     delete(component_store.component_sparse)
@@ -468,7 +470,7 @@ deinit_component_store :: proc(component_store : $C/^$ComponentStore){
 
 //////////////////////// Sparse Set //////////////////////////
 ComponentSparse :: struct { 
-    component_blob : rawptr, 
+    component_blob : ^rawptr, 
     entity_blob : rawptr,
     sparse_blob : rawptr, 
     len : u32,  
@@ -477,19 +479,32 @@ ComponentSparse :: struct {
 }
 
 @(private)
-init_component_sparse :: proc($type_size : int) -> ComponentSparse{
-    component_blob,_ := mem.alloc(type_size * DEFAULT_COMPONENT_SPARSE)
+init_component_sparse :: proc($type : typeid) -> ComponentSparse{
+
+    @(static) component_soa_dense :#soa [dynamic]type
+    component_soa_blob := (^rawptr)(&component_soa_dense)
+
+    //component_blob,_ := mem.alloc(size_of(type) * DEFAULT_COMPONENT_SPARSE)
     entity_blob,_ := mem.alloc(DEFAULT_COMPONENT_SPARSE << 2)
     sparse_blob,_ := mem.alloc(524280)//TODO: khal high allocation maybe do pagination. Look at the pro, cons, and design....
 
     return ComponentSparse{
         sparse_blob = sparse_blob,
         entity_blob = entity_blob,
-        component_blob = component_blob,
+        component_blob = component_soa_blob,
         len = 0,
         cap = DEFAULT_COMPONENT_SPARSE,
-        component_size = type_size,
+        component_size = size_of(type),
     }
+}
+
+deinit_component_sparse :: proc(component_sparse :ComponentSparse ){
+    raw_soa := component_sparse.component_blob
+
+    free(raw_soa^)
+    free(component_sparse.entity_blob)
+    free(component_sparse.sparse_blob)
+
 }
 
 @(private)
@@ -503,27 +518,31 @@ internal_sparse_put_index :: #force_inline proc(component_sparse : $S/^$Componen
     sparse_ptr^ = value
 }
 
-@(private)
-internal_sparse_resize :: proc(component_sparse : $S/^$ComponentSparse){
-    capacity := int(component_sparse.cap) 
+// @(private)
+// internal_sparse_resize :: proc(component_sparse : $S/^$ComponentSparse){
+//     capacity := int(component_sparse.cap) 
 
-    component_sparse.entity_blob,_ = mem.resize(component_sparse.entity_blob, capacity, capacity + capacity)
-    component_sparse.component_blob,_ = mem.resize(component_sparse.component_blob, capacity,  capacity + capacity)
-    component_sparse.cap += component_sparse.cap
-}
+//     component_sparse.entity_blob,_ = mem.resize(component_sparse.entity_blob, capacity, capacity + capacity)
+//     component_sparse.component_blob,_ = mem.resize(component_sparse.component_blob, capacity,  capacity + capacity)
+//     component_sparse.cap += component_sparse.cap
+// }
 
-//Doesn't check if the entity already has a component, so any caller to this function must check or risk undefined behaviour.
 @(private)
 internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, entity : int, component : $T) #no_bounds_check{
-    if component_sparse.cap == component_sparse.len{
-        internal_sparse_resize(component_sparse)
-    }
+    // if component_sparse.cap == component_sparse.len{
+    //     internal_sparse_resize(component_sparse)
+    // }
+
+    soa_component := cast(^#soa[dynamic]T)(component_sparse.component_blob)
 
     sparse_len := int(component_sparse.len)
     component_sparse.len += 1
 
-    comp_ptr :^T= ([^]T)(component_sparse.component_blob)[sparse_len:]
-    comp_ptr^ = component
+    append_soa_elem(soa_component, component)
+    fmt.println(soa_component^)
+
+    // comp_ptr :^T= ([^]T)(component_sparse.component_blob)[sparse_len:]
+    // comp_ptr^ = component
 
     ent_ptr :^u32= ([^]u32)(component_sparse.entity_blob)[sparse_len:]
     ent_ptr^ = u32(entity)
@@ -609,7 +628,6 @@ internal_sparse_swap :: proc(component_sparse : $S/^$ComponentSparse, #any_int d
 ///////////////////////////////////////////////////////////
 
 ///////////////////////// Systems /////////////////////////
-
 
 
 
