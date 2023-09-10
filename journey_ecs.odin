@@ -11,11 +11,6 @@ import "core:mem"
 // and removing the currently iterate will be swap by the last which won't invalidate the iteration (removing must be done at the end after manipulation)
 // Or should i pass the responsiblity to the user where user have to use  #reverse on iteration on dense.
 
-DummyStruct :: struct{
-    x : int,
-    y : int, 
-    z : int,
-}
 ////////////////////////////// ECS Constant /////////////////////////////
 
 DEFAULT_CAPACITY :: 32
@@ -518,31 +513,26 @@ internal_sparse_put_index :: #force_inline proc(component_sparse : $S/^$Componen
     sparse_ptr^ = value
 }
 
-// @(private)
-// internal_sparse_resize :: proc(component_sparse : $S/^$ComponentSparse){
-//     capacity := int(component_sparse.cap) 
+@(private)
+internal_sparse_resize :: proc(component_sparse : $S/^$ComponentSparse){
+    capacity := int(component_sparse.cap) 
 
-//     component_sparse.entity_blob,_ = mem.resize(component_sparse.entity_blob, capacity, capacity + capacity)
-//     component_sparse.component_blob,_ = mem.resize(component_sparse.component_blob, capacity,  capacity + capacity)
-//     component_sparse.cap += component_sparse.cap
-// }
+    component_sparse.entity_blob,_ = mem.resize(component_sparse.entity_blob, capacity, capacity + capacity)
+    component_sparse.cap += component_sparse.cap
+}
 
 @(private)
 internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, entity : int, component : $T) #no_bounds_check{
-    // if component_sparse.cap == component_sparse.len{
-    //     internal_sparse_resize(component_sparse)
-    // }
+    if component_sparse.cap == component_sparse.len{
+        internal_sparse_resize(component_sparse)
+    }
 
-    soa_component := cast(^#soa[dynamic]T)(component_sparse.component_blob)
+    soa_component_array := cast(^#soa[dynamic]T)(component_sparse.component_blob)
 
     sparse_len := int(component_sparse.len)
     component_sparse.len += 1
 
-    append_soa_elem(soa_component, component)
-    fmt.println(soa_component^)
-
-    // comp_ptr :^T= ([^]T)(component_sparse.component_blob)[sparse_len:]
-    // comp_ptr^ = component
+    append_soa_elem(soa_component_array, component)
 
     ent_ptr :^u32= ([^]u32)(component_sparse.entity_blob)[sparse_len:]
     ent_ptr^ = u32(entity)
@@ -577,13 +567,16 @@ internal_sparse_put :: proc(component_sparse : $S/^$ComponentSparse,#any_int ent
 
 @(private)
 internal_sparse_remove :: proc(component_sparse : $S/^$ComponentSparse, entity : int, $component_type : typeid){
-    component_sparse.len -= 1
     
+    soa_component_array := cast(^#soa[dynamic]component_type)(component_sparse.component_blob)
+    raw_footer := raw_soa_footer_dynamic_array(soa_component_array)
+
+    component_sparse.len -= 1
     dense_id := internal_sparse_get_index(component_sparse, entity)
 
-    last_comp_ptr := ([^]component_type)(component_sparse.component_blob)[component_sparse.len]
-    removed_comp_ptr :^component_type= ([^]component_type)(component_sparse.component_blob)[dense_id:]
-    removed_comp_ptr^ = last_comp_ptr
+    last_component := soa_component_array[raw_footer.len - 1]
+    soa_component_array[dense_id] = last_component
+    raw_footer.len -= 1
 
     last_entity := ([^]u32)(component_sparse.entity_blob)[component_sparse.len]
     ent_ptr :^u32 = ([^]u32)(component_sparse.entity_blob)[dense_id:]
@@ -618,10 +611,12 @@ internal_sparse_swap :: proc(component_sparse : $S/^$ComponentSparse, #any_int d
     dst_id := internal_sparse_get_index(component_sparse, dst_entity)
     src_id := internal_sparse_get_index(component_sparse, src_entity)
     
+    //TODO:khal we need to rewrite the swap since it is stored as a SOA
     dst_index := dst_id * component_sparse.component_size
     src_index := src_id * component_sparse.component_size
 
     slice.ptr_swap_non_overlapping(rawptr(uintptr(component_sparse.component_blob) + uintptr(dst_index)), rawptr(uintptr(component_sparse.component_blob) + uintptr(src_index)), component_sparse.component_size) 
+    
     slice.ptr_swap_non_overlapping(([^]u32)(component_sparse.entity_blob)[dst_id:], ([^]u32)(component_sparse.entity_blob)[src_id:], size_of(u32))
 }
 
