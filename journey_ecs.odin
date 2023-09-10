@@ -10,13 +10,12 @@ import "core:mem"
 // So inserting will add to the last and won't enter the iteration (since it at the end)
 // and removing the currently iterate will be swap by the last which won't invalidate the iteration (removing must be done at the end after manipulation)
 // Or should i pass the responsiblity to the user where user have to use  #reverse on iteration on dense.
-//TODO:Khal should I take into account of user adding or removing component while iterating over it
-// If so then we need to find a way to handle invalidation. One way is to iterate from last to first
-// So inserting will add to the last and won't enter the iteration (since it at the end)
-// and removing the currently iterate will be swap by the last which won't invalidate the iteration (removing must be done at the end after manipulation)
-// Or should i pass the responsiblity to the user where user have to use  #reverse on iteration on dense.
 
-
+DummyStruct :: struct{
+    x : int,
+    y : int, 
+    z : int,
+}
 ////////////////////////////// ECS Constant /////////////////////////////
 
 DEFAULT_CAPACITY :: 32
@@ -169,7 +168,6 @@ init_entity_store :: proc() -> EntityStore{
 //GOOD
 @(private)
 deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
-    //TODO:khal doesn't seem to delete the dynamic array 
     delete(entity_store.entities)
 }
 @(private)
@@ -482,8 +480,8 @@ ComponentSparse :: struct {
 @(private)
 init_component_sparse :: proc($type : typeid) -> ComponentSparse{
 
-    @(static) component_soa_dense :#soa [dynamic]type
-    component_soa_blob := (^rawptr)(&component_soa_dense)
+    component_soa_dense :^#soa [dynamic]type = new(#soa[dynamic]type)
+    component_soa_blob := (^rawptr)(component_soa_dense)
 
     //component_blob,_ := mem.alloc(size_of(type) * DEFAULT_COMPONENT_SPARSE)
     entity_blob,_ := mem.alloc(DEFAULT_COMPONENT_SPARSE << 2)
@@ -503,6 +501,7 @@ deinit_component_sparse :: proc(component_sparse :ComponentSparse ){
     raw_soa := component_sparse.component_blob
 
     free(raw_soa^)
+    free(raw_soa)
     free(component_sparse.entity_blob)
     free(component_sparse.sparse_blob)
 
