@@ -169,6 +169,7 @@ init_entity_store :: proc() -> EntityStore{
 //GOOD
 @(private)
 deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
+    //TODO:khal doesn't seem to delete the dynamic array 
     delete(entity_store.entities)
 }
 @(private)
