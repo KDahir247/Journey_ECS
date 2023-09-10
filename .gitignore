@@ -1,0 +1,22 @@
+# Editors
+.vs
+.vscode
+.idea
+
+# Odin Language Server
+/ols.json
+/odinfmt.json
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Export Files
+*.exp
