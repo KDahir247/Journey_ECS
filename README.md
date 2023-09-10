@@ -17,7 +17,7 @@ Currently It is works, but still on heavy WIP
 - Resources
 
 **Limitation**
-- small to no checks so undefined behaviour on invalid use (so call register before adding component and make sure when removing a component entity actually has component or call has_component with a if statement)
+- small to no checks on sparse sets so invalid use will cause undefined behaviour (so call register before adding component and make sure when removing a component entity actually has component or call has_component with a if statement. Use has_component when unsure.)
 - Slighly higher memory due to sparse array with holes 
 - No shared component model out of the box (this is passed to the user and I don't see this as a limitation)
 - Removing component or adding component on the of the same component type dense array that we are iterating will cause invalidation and problem.
