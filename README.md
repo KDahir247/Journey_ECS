@@ -29,13 +29,20 @@ import ecs "foldername that has this single script"
 
 main :: proc(){
 
+  
     world := init_world()
- 
-    register(world, string)
-    register(world, f64)
-    register(world, bool)
 
     
+
+    DummyStruct :: struct{
+        x : int,
+        y : int, 
+        z : int,
+    }
+    register(world, DummyStruct)
+
+
+    //Not implemented yet for SOA
     //Used for fast group component query where entity contain both
     //group_registry(world, {f64, string})
     // Used for fast group component query where entity are group by each component group and entities with all the group component are first
@@ -45,48 +52,35 @@ main :: proc(){
     entity1 := create_entity(world) 
     entity2 := create_entity(world) 
     entity3 := create_entity(world) 
-    entity4 := create_entity(world) // 4
+    entity4 := create_entity(world)
 
-    add_component(world, entity1, 3.3)
-    add_component(world, entity, 5.4)
-    add_component(world, entity3, 2.4)
+    dummy1 := DummyStruct{
+        1,2,3,
+    }
 
-    add_component(world,entity4, "Who")
-    add_component(world,entity1, "Hello")
-    add_component(world,entity, "Bob")
-    add_component(world, entity3, "NOOo")
-    
-    add_component(world, entity4, true)
-    add_component(world, entity, true)
-    add_component(world, entity1, true)
+    dummy2 := DummyStruct{
+        4,5,6,
+    }
 
-    //Get component allow you to modify the data since it a ptr to the data
-    //Or you can call set component
-    set_component(world, entity, 200.0)
-    fmt.println(get_component(world, entity, f64)^)
-    fmt.println(has_component(world, entity1, string))
+    add_component(world, entity, dummy1)
+    add_component(world, entity1, dummy2)
 
-    remove_component(world, entity, string )
-
-    // Bob is removed so when we call these two function 0 is removed from the entity dense array
-    // Bob is removed from the component dense array in the sparse set
-    // and the sparse array at entity is reset. 
-    fmt.println(get_entities_with_component(world, string))
-    fmt.println(get_components_with_id(world, string))
-
-   for float_component in get_components_with_id(world, f64){
-    // logic
-   }
+    remove_component(world, entity1,DummyStruct)
 
 
-   for float_entity in get_entities_with_component(world, f64){
-    // logic
-   }
+    dummy_soa_array, length := get_soa_components(world, SOAType(DummyStruct))
 
-   // Fast System iteration is a working progress currently for Group and Subgroup
-   
 
-	deinit_world(world)
+    for i in 0..< length{
+        fmt.println("before",dummy_soa_array[i])
+        dummy_soa_array[i].x += 1
+        fmt.println("after",dummy_soa_array[i])
+        fmt.println()
+
+    }
+
+    add_component(world,entity1,dummy2)
+    deinit_world(world)
     free(world)
 
 }
