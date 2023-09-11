@@ -11,6 +11,7 @@ import "core:mem"
 // and removing the currently iterate will be swap by the last which won't invalidate the iteration (removing must be done at the end after manipulation)
 // Or should i pass the responsiblity to the user where user have to use  #reverse on iteration on dense.
 
+
 ////////////////////////////// ECS Constant /////////////////////////////
 
 DEFAULT_CAPACITY :: 32
@@ -22,6 +23,7 @@ Resources :: struct{
     //
 }
 
+SOAType :: struct($T : typeid){}
 ////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////// ECS Utility /////////////////////////////
@@ -106,11 +108,15 @@ get_entities_with_component :: proc(world : $W/^$World, $component_type : typeid
     return internal_sparse_fetch_entities(&world.component_stores.component_sparse[sparse_index])
 } 
 
-get_components_with_id :: proc(world : $W/^$World, $component_type : typeid) -> []component_type{
-    sparse_index := world.component_stores.component_info[component_type].sparse_index
-    return internal_sparse_fetch_components(&world.component_stores.component_sparse[sparse_index], component_type)
-}
 
+
+get_soa_components :: proc(world : $W/^$World, $component_type : typeid/SOAType($E)) -> (slice :# soa[]E, len : int){
+    sparse_index := world.component_stores.component_info[component_type].sparse_index
+    sparse_set := world.component_stores.component_sparse[sparse_index]
+    soa_slice := internal_sparse_fetch_components(&sparse_set, component_type)
+
+    return soa_slice, int(sparse_set.len)
+}
 add_component :: proc(world : $W/^$World, entity : u32, component : $T){
     if intrinsics.expect(internal_entity_is_alive(&world.entities_stores, entity), true){ //TODO: khal remove for something better.
         internal_increment_version(&world.entities_stores, entity) //TODO: khal swap for something better.
@@ -522,7 +528,9 @@ internal_sparse_resize :: proc(component_sparse : $S/^$ComponentSparse){
 }
 
 @(private)
-internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, entity : int, component : $T) #no_bounds_check{
+internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, entity : int, component : $T) #no_bounds_check
+{
+    
     if component_sparse.cap == component_sparse.len{
         internal_sparse_resize(component_sparse)
     }
@@ -595,8 +603,8 @@ internal_sparse_has :: #force_inline proc(component_sparse : $S/^$ComponentSpars
 }
 
 @(private)
-internal_sparse_fetch_components :: #force_inline proc(component_sparse : $S/^$ComponentSparse, $component_type : typeid) -> []component_type{
-    return ([^]component_type)(component_sparse.component_blob)[:component_sparse.len]
+internal_sparse_fetch_components :: #force_inline proc(component_sparse : $S/^$ComponentSparse, $component_type : typeid/SOAType($E)) -> #soa[]E{
+    return (cast(^#soa[]E)(component_sparse.component_blob))^
 }
 
 @(private)
