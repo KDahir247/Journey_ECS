@@ -1,6 +1,5 @@
 package journey
 
-
 import "core:slice"
 import "core:runtime"
 import "core:fmt"
@@ -347,7 +346,7 @@ internal_register_component :: #force_inline proc(component_store : $C/^$Compone
 
         component_store.component_info[component_type] = ComponentInfo{
             sparse_index = len(component_store.component_sparse),
-            flags = {.Created,.Sync}
+            flags = {.Created, .Sync}
         }
 
         component_sparse := init_component_sparse(component_type)
@@ -376,7 +375,6 @@ ComponentSparse :: struct {
     entity_blob : rawptr,
     sparse_blob : rawptr, 
     len : int, //TODO: remove if possible
-    capacity : int,  
 }
 
 @(private)
@@ -395,7 +393,6 @@ init_component_sparse :: proc($type : typeid) -> ComponentSparse{
         entity_blob = entity_blob,
         component_blob = component_soa_blob,
         len = 0,
-        capacity = DEFAULT_COMPONENT_SPARSE,
     }
 }
 
@@ -403,7 +400,7 @@ deinit_component_sparse :: proc(component_sparse :ComponentSparse ){
 
     mem.free_with_size(component_sparse.sparse_blob,524280)
     //entity_blob contains u32
-    mem.free_with_size(component_sparse.entity_blob, component_sparse.capacity << 2)
+    mem.free(component_sparse.entity_blob)
 
     free((^rawptr)(component_sparse.component_blob)^)
     free(component_sparse.component_blob)
@@ -425,7 +422,6 @@ internal_sparse_resize :: proc(component_sparse : $S/^$ComponentSparse, capacity
     new_capacity := (capacity << 1) + 8
     // size of u32 is 4, so 1 << 2 == 1 * 4
     component_sparse.entity_blob,_ = mem.resize(component_sparse.entity_blob, capacity << 2, new_capacity << 2, 4)
-    component_sparse.capacity = new_capacity
 }
 
 @(private)
@@ -433,11 +429,12 @@ internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, #any_int e
 {
     next_sparse_len := component_sparse.len + 1
     soa_component_array := cast(^#soa[dynamic]T)(component_sparse.component_blob)
+    soa_capacity := cap(soa_component_array)
 
     //We will follow the same condition check in append_soa_elem to resize
     //and the capacity increase in soa dynamic array.
-    if component_sparse.capacity <= next_sparse_len{
-        internal_sparse_resize(component_sparse, cap(soa_component_array))
+    if soa_capacity <= next_sparse_len{
+        internal_sparse_resize(component_sparse, soa_capacity)
     }
 
     append_soa_elem(soa_component_array, component)
@@ -492,7 +489,7 @@ internal_sparse_remove :: proc(component_sparse : $S/^$ComponentSparse, #any_int
     ent_ptr^ = last_entity
 
     sparse_ptr : ^int = ([^]int)(component_sparse.sparse_blob)[last_entity:]
-    sparse_ptr^ = dense_id
+    sparse_ptr^ = dense_id + 1
     
     internal_sparse_put_index(component_sparse, entity, 0)
 }
@@ -607,6 +604,7 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid) -> Query_2(a,b) {
    
     //Sorting the data depending on the grouping
     if .Sync not_in component_info_a.flags || .Sync not_in component_info_b.flags{
+        group.start = 0
 
         sparse_set_a := world.component_stores.component_sparse[component_info_a.sparse_index]
         sparse_set_b := world.component_stores.component_sparse[component_info_b.sparse_index]
@@ -619,19 +617,24 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid) -> Query_2(a,b) {
             is_valid := internal_sparse_has(&sparse_set_a, entity)
             is_valid &= internal_sparse_has(&sparse_set_b, entity)
             
-            if is_valid == 1{
-                if internal_sparse_get_index(&sparse_set_a, entity) > group.start{
-                    group_start_entity := internal_sparse_index_entity(&sparse_set_a, group.start)
-                    internal_sparse_swap(&sparse_set_a, group_start_entity, entity, a)
-                }
-        
-                if internal_sparse_get_index(&sparse_set_b, entity) > group.start{
-                    group_start_entity := internal_sparse_index_entity(&sparse_set_b, group.start)
-                    internal_sparse_swap(&sparse_set_b, group_start_entity, entity, b)
-                }
-                
-                group.start += 1
+            sparse_index_a := internal_sparse_get_index(&sparse_set_a, entity)
+            sparse_index_b := internal_sparse_get_index(&sparse_set_b, entity)
+
+            target_sparse_index_a := sparse_index_a * is_valid
+            target_sparse_index_b := sparse_index_b * is_valid
+
+            if target_sparse_index_a > group.start{
+                group_start_entity := internal_sparse_index_entity(&sparse_set_a, group.start)
+                internal_sparse_swap(&sparse_set_a, group_start_entity, entity, a)
             }
+
+            if target_sparse_index_b > group.start{
+                group_start_entity := internal_sparse_index_entity(&sparse_set_b, group.start)
+                internal_sparse_swap(&sparse_set_b, group_start_entity, entity, b)
+            }
+
+            group.start += is_valid
+
         }
 
         component_info_a.flags = {.Sync, .Created}
@@ -646,8 +649,6 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid) -> Query_2(a,b) {
 
 @(private)
 query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid){
-    //Here where to sub group sorting happens.....
-    //We might to make a way to check if the sort is dirty so it doesn't sort every time 
 }
 
 @(private)
@@ -691,7 +692,6 @@ run_2 :: proc(query : ^Query_2($a, $b)) -> (iterator : Iter_2(a,b), idx : int, c
     return
 }
 
-//TODO: with will be with subgrouping
 // with_1 :: proc(){
 
 // }
@@ -710,5 +710,3 @@ run_2 :: proc(query : ^Query_2($a, $b)) -> (iterator : Iter_2(a,b), idx : int, c
 
 query :: proc{query_1, query_2, query_3, query_4}
 run :: proc{run_1, run_2}
-
-//////////////////////////////////////////////////////////
