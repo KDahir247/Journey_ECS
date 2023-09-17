@@ -8,9 +8,9 @@ Currently It is works, but still on heavy WIP
 - Fast single component iteration & entity iteration (Dense array iteration) 
 - Unlimitied amount of component can be added
 - Very minimal Only does what it needs and nothing more.
+- SOA component dense array
 
 **Future Features**
-- SOA component dense array
 - Reduced memory consumption on sparse array
 - Allow upto or more then 1 Million entity. Current max is 65,536 entity (requires re-implementing entity store)
 - Extremely fast grouping and sub grouping iteration (eg. Entity with position and scale)
@@ -29,59 +29,86 @@ import ecs "foldername that has this single script"
 
 main :: proc(){
 
-  
     world := init_world()
+    defer deinit_world(world)
 
-    
-
-    DummyStruct :: struct{
-        x : int,
-        y : int, 
-        z : int,
+    Position :: struct{
+        val : #simd[4]f32,
     }
-    register(world, DummyStruct)
 
+    Rotation :: struct{
+        val : #simd[4]f32,
+    }
 
-    //Not implemented yet for SOA
-    //Used for fast group component query where entity contain both
-    //group_registry(world, {f64, string})
-    // Used for fast group component query where entity are group by each component group and entities with all the group component are first
-    //subgroup_registry(world, ComponentGroup{component_ids = {f64, string}}, ComponentGroup{ component_ids = {bool} })
+    Scale :: struct{
+        val : #simd[4]f32,
+    }
 
+    Velocity :: struct{
+        val : #simd[4]f32,
+    }
+
+    register(world, Position)
+    register(world, Rotation)
+    register(world, Scale)
+    register(world, Velocity)
+    
     entity := create_entity(world)
     entity1 := create_entity(world) 
     entity2 := create_entity(world) 
     entity3 := create_entity(world) 
     entity4 := create_entity(world)
 
-    dummy1 := DummyStruct{
-        1,2,3,
+    velocityx := Velocity{
+        val = {1.0, 0.0, 0.0, 0.0},
     }
 
-    dummy2 := DummyStruct{
-        4,5,6,
+    postion_x := Position{
+        val = {2.0, 0.0, 0.0, 0.0},
     }
 
-    add_component(world, entity, dummy1)
-    add_component(world, entity1, dummy2)
+    postion_y := Position{
+        val = {0.0,3.14,0.0,0.0},
+    }
 
-    remove_component(world, entity1,DummyStruct)
+    position_xy := Position{
+        val = {24.0,7.11,0.0,0.0},
+    }
+   
 
+    Quaternion_IDENTITY := Rotation{
+        val = {0.0,0.0,0.0,1.0},
+    }
 
-    dummy_soa_array, length := get_soa_components(world, SOAType(DummyStruct))
+    add_soa_component(world, entity2, velocityx)
+    add_soa_component(world, entity1, postion_x)
+    add_soa_component(world, entity2, postion_y)
+    add_soa_component(world, entity2, Quaternion_IDENTITY)
 
+    add_soa_component(world, entity, position_xy)
+    add_soa_component(world, entity, Quaternion_IDENTITY)
 
-    for i in 0..< length{
-        fmt.println("before",dummy_soa_array[i])
-        dummy_soa_array[i].x += 1
-        fmt.println("after",dummy_soa_array[i])
+    postion_scale_query := query(world, Velocity, Scale) //register and sort using group
+    position_rotation_query := query(world, Position, Rotation) //register and sort using group
+
+    position_rotation_query1 := query(world, Position, Rotation) //doesn't register or sort using group uses the cache result
+    postion_scale_query1 := query(world, Velocity, Scale) //doesn't register or sort using group uses the cache result
+    
+   
+     for component_storage, index in run(&position_rotation_query){
+        mut_component_storage := component_storage
+
+        if component_storage.entities[index] == 2{
+            fmt.println("Moving the player entity", component_storage.entities[index] , "Right by 100" )
+            mut_component_storage.component_a[index].val += {100.0, 0.0, 0.0, 0.0}
+        }
+
+        fmt.print(component_storage.entities[index], " :\t")
+        fmt.print(component_storage.component_a[index], "\t")
+        fmt.print(component_storage.component_b[index])
         fmt.println()
-
-    }
-
-    add_component(world,entity1,dummy2)
-    deinit_world(world)
-    free(world)
+     }
+     fmt.println("\n")
 
 }
 
