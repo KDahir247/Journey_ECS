@@ -14,6 +14,7 @@ Currently It is works, but still on heavy WIP
 - Reduced memory consumption on sparse array
 - Allow upto or more then 1 Million entity. Current max is 65,536 entity (requires re-implementing entity store)
 - Extremely fast grouping and sub grouping iteration (eg. Entity with position and scale)
+- Iterate from last to first, so adding or removing component while iterating doesn't cause invalidation
 
 **Limitation**
 - small to no checks so undefined behaviour on invalid use (so call register before adding component and make sure when removing a component entity actually has component or call has_component with a if statement)
