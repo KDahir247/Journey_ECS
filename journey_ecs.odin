@@ -623,26 +623,25 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
             component_info_b.flags = {.Sync, .Created}
         }
 
-        //Group_a and Group_b indicies are shared so we can use either.
-        group_index := component_info_a.group_indices[0]
-        group := &world.component_stores.groups[group_index]
-
-        group_count_target := component_info_a.sparse_index + component_info_b.sparse_index
-
-        //Creating and re-grouping components.
-        //TODO: this condition check will change when implementing sub-grouping
-        if group.count != group_count_target{
-            group_index_a := internal_unregister_group(&world.component_stores, a)
-            group_index_b := internal_unregister_group(&world.component_stores, b)
-            group_index = max(group_index_a, group_index_b)
-
-            group_index = internal_register_group(&world.component_stores, {a,b}, group_index)
-            group^ = world.component_stores.groups[group_index]
-            group.count = group_count_target
-
-            component_info_a.flags = { .Created}
-            component_info_b.flags = { .Created}
-        }
+          //Group_a and Group_b indicies are shared so we can use either.
+          group_index := component_info_a.group_indices[0]
+          group_count_target := component_info_a.sparse_index + component_info_b.sparse_index
+  
+          //Creating and re-grouping components.
+          //TODO: this condition check will change when implementing sub-grouping
+          if world.component_stores.groups[group_index].count != group_count_target{
+              group_index_a := internal_unregister_group(&world.component_stores, a)
+              group_index_b := internal_unregister_group(&world.component_stores, b)
+              group_index = max(group_index_a, group_index_b)
+  
+              group_index = internal_register_group(&world.component_stores, {a,b}, group_index)
+  
+              component_info_a.flags = { .Created}
+              component_info_b.flags = { .Created}
+          }
+          group := &world.component_stores.groups[group_index]
+          group.count = group_count_target
+  
    
         //Sorting the data depending on the grouping
         //TODO:khal create a better conditional check.
@@ -702,26 +701,27 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
     }
 
     group_index := component_info_a.group_indices[0]
-    group := &world.component_stores.groups[group_index]
-
     group_count_target := component_info_a.sparse_index + component_info_b.sparse_index + component_info_c.sparse_index
 
-    if group.count != group_count_target{
+    //Creating and re-grouping components.
+    //TODO: this condition check will change when implementing sub-grouping
+    if world.component_stores.groups[group_index].count != group_count_target{
         group_index_a := internal_unregister_group(&world.component_stores, a)
         group_index_b := internal_unregister_group(&world.component_stores, b)
-        group_index_c := internal_unregister_group(&world.component_stores, b)
+        group_index_c := internal_unregister_group(&world.component_stores, c)
 
         group_index = max(group_index_a, group_index_b, group_index_c)
-        group_index = internal_register_group(&world.component_stores, {a,b,c}, group_index)
 
-        group^ = world.component_stores.groups[group_index]
-        group.count = group_count_target
+        group_index = internal_register_group(&world.component_stores, {a,b,c}, group_index)
 
         component_info_a.flags = { .Created}
         component_info_b.flags = { .Created}
         component_info_c.flags = { .Created}
-    }
 
+    }
+    
+    group := &world.component_stores.groups[group_index]
+    group.count = group_count_target
 
     //TODO:khal create a better conditional check.
     if .Sync not_in component_info_a.flags || .Sync not_in component_info_b.flags || .Sync not_in component_info_c.flags{
@@ -789,11 +789,9 @@ query_4 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $d : t
     }
 
     group_index := component_info_a.group_indices[0]
-    group := &world.component_stores.groups[group_index]
-
     group_count_target := (component_info_a.sparse_index + component_info_b.sparse_index) + (component_info_c.sparse_index + component_info_d.sparse_index)
 
-    if group.count != group_count_target{
+    if world.component_stores.groups[group_index].count != group_count_target{
         group_index_a := internal_unregister_group(&world.component_stores, a)
         group_index_b := internal_unregister_group(&world.component_stores, b)
         group_index_c := internal_unregister_group(&world.component_stores, c)
@@ -802,15 +800,15 @@ query_4 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $d : t
         group_index = max(group_index_a, group_index_b, group_index_c, group_index_d)
 
         group_index = internal_register_group(&world.component_stores, {a,b,c,d}, group_index)
-        group^ = world.component_stores.groups[group_index]
-        group.count = group_count_target
 
         component_info_a.flags = { .Created}
         component_info_b.flags = { .Created}
         component_info_c.flags = { .Created}
         component_info_d.flags = { .Created}
-
     }
+    
+    group := &world.component_stores.groups[group_index]
+    group.count = group_count_target
 
 
     if .Sync not_in component_info_a.flags || .Sync not_in component_info_b.flags || .Sync not_in component_info_c.flags || .Sync not_in component_info_d.flags{
