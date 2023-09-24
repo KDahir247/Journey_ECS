@@ -1,4 +1,4 @@
-package journey 
+package journey
 
 import "core:slice"
 import "core:runtime"
@@ -234,12 +234,6 @@ Group :: struct{
 /////////////////////////////////////////////////////////////////
 
 ///////////////////// Component Store ///////////////////////////
-Component_Flag :: enum u64{
-    Modified = 0b1,
-    Created = 0b10,
-    Sync = 0b11,
-}
-
 ComponentInfo :: struct{
     group_indices : [2]int,
     sparse_index : int,
@@ -349,7 +343,7 @@ ComponentSparse :: struct {
     entity_blob : rawptr,
     sparse_blob : rawptr, 
     len : int, 
-    modification_count : int, //Modification will only track removal and inserting count till reset
+    modification_count : int, 
 }
 
 @(private)
@@ -508,6 +502,11 @@ internal_sparse_fetch_entities :: #force_inline proc(component_sparse : $S/^$Com
 }
 
 @(private)
+internal_sparse_fetch_entities_upto :: #force_inline proc(component_sparse : $S/^$ComponentSparse, len : int) -> []u32 {
+    return ([^]u32)(component_sparse.entity_blob)[:len]
+}
+
+@(private)
 internal_sparse_swap :: #force_inline proc(component_sparse : $S/^$ComponentSparse, #any_int dst_entity, src_entity : int, $component_type : typeid, mask : int = 1) #no_bounds_check{
     soa_component_slice := (cast(^#soa[]component_type)(component_sparse.component_blob))
     sparse_slice := ([^]int)(component_sparse.sparse_blob)
@@ -592,7 +591,7 @@ query_1 :: proc(world : $W/^$World, $a : typeid) -> Query_1(a) #no_bounds_check{
     } 
 }
 
-//|A,B|
+  
 @(private)
 query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) -> Query_2(a,b) 
     where chunk_size > 2 && chunk_size % 2 == 0 && a != b #no_bounds_check  {
@@ -667,7 +666,7 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
     }
 }
 
-//||A,B| |C||
+//TODO: khal optimize sub-group implementation.
 @(private)
 query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk_size : int) -> Query_3(a, b, c)
     where chunk_size > 2 && chunk_size % 2 == 0 && c != a && c != b #no_bounds_check{ 
@@ -684,6 +683,7 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
 
         defer internal_component_sparse_mod_zeroed(&world.component_stores.component_sparse[component_info_c.sparse_index])
 
+        //|A,B| |C|
 
         sub_group_index := component_info_c.group_indices[1]
 
@@ -700,16 +700,12 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
         if total_modification_count > 0 && ab_query.len > 0{
             sub_group.start = 0
 
-            entities_a := internal_sparse_fetch_entities(&sparse_set_a)
-            entities_b := internal_sparse_fetch_entities(&sparse_set_b)
+            entities_a := internal_sparse_fetch_entities_upto(&sparse_set_a, ab_query.len)
+            entities_b := internal_sparse_fetch_entities_upto(&sparse_set_b, ab_query.len)
             
             entities_c := internal_sparse_fetch_entities(&sparse_set_c)
-            //minimum_iteration := min(ab_query.len, sparse_set_c.len)
 
-            //Should i chunk this as well?
             for entity in entities_c{
-                //We need check c in a and b
-                //Should we fetch a and b???
                 group_start_entity_a := entities_a[sub_group.start]
                 group_start_entity_b := entities_b[sub_group.start]
                 group_start_entity_c := entities_c[sub_group.start]
@@ -732,7 +728,6 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
         }
 }
 
-//||A,B| |C,D||
 @(private)
 query_4 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $d : typeid, $chunk_size : int) -> Query_4(a,b,c,d) 
     where chunk_size > 2 && chunk_size % 2 == 0 #no_bounds_check{
@@ -933,6 +928,9 @@ run_4 :: proc(query : ^Query_4($a, $b, $c, $d)) -> (iterator : Iter_4(a,b,c,d), 
     return
 }
 
+
 query :: proc{query_1, query_2, query_3, query_4}
 
 run :: proc{run_1, run_2, run_3, run_4}
+
+//////////////////////////////////////////////////////////
