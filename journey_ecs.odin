@@ -5,12 +5,6 @@ import "core:runtime"
 import "core:fmt"
 import "core:intrinsics"
 import "core:mem"
-//TODO:Khal should I take into account of user adding or removing component while iterating over it
-// If so then we need to find a way to handle invalidation. One way is to iterate from last to first
-// So inserting will add to the last and won't enter the iteration (since it at the end)
-// and removing the currently iterate will be swap by the last which won't invalidate the iteration (removing must be done at the end after manipulation)
-// Or should i pass the responsiblity to the user where user have to use  #reverse on iteration on dense.
-
 
 ////////////////////////////// ECS Constant /////////////////////////////
 
@@ -262,7 +256,7 @@ init_component_store :: proc() -> ComponentStore #no_bounds_check{
 }
 
 @(private)
-internal_register_group :: proc(component_store : $C/^$ComponentStore,$group_type :Group_Type, structure_types : []typeid, index : int) -> int{
+internal_register_group :: proc(component_store : $C/^$ComponentStore,$group_type :Group_Type, structure_types : []typeid, index : int) -> int #no_bounds_check{
     group : Group
 
     //if mask index is -1 it mean that there is so free up space so we need to append, thus getting the length of the groups collection
@@ -534,28 +528,38 @@ Query_1 :: struct($a : typeid){
     world : ^World,
     index : int,
     len : int,
-    sparse_indices : int,
+
+    a_sparse_index : int,
 }
 
 Query_2 :: struct($a : typeid, $b : typeid){
     world : ^World,
     index : int,
     len : int,
-    sparse_indices : [2]int,
+
+    a_sparse_index : int,
+    b_sparse_index : int,
 }
 
 Query_3 :: struct($a : typeid, $b : typeid, $c : typeid){
     world : ^World,
     index : int,
     len : int,
-    sparse_indices : [3]int,
+
+    a_sparse_index : int,
+    b_sparse_index : int,
+    c_sparse_index : int,
 }
 
 Query_4 :: struct($a : typeid, $b : typeid, $c : typeid, $d : typeid){
     world : ^World,
     index : int,
     len : int,
-    sparse_indices : [4]int,
+
+    a_sparse_index : int,
+    b_sparse_index : int,
+    c_sparse_index : int,
+    d_sparse_index : int,
 }
 
 Iter_1 :: struct($a : typeid){
@@ -586,8 +590,15 @@ Iter_4 :: struct($a : typeid, $b : typeid, $c : typeid, $d : typeid){
 
 @(private)
 query_1 :: proc(world : $W/^$World, $a : typeid) -> Query_1(a) #no_bounds_check{
+    component_info_a := world.component_stores.component_info[a]
+    sparse_set_a := world.component_stores.component_sparse[component_info_a.sparse_index]
+
     return Query_1(a){
         world = world,
+        index = 0,
+        len = sparse_set_a.len,
+
+        a_sparse_index = component_info_a.sparse_index,
     } 
 }
 
@@ -598,20 +609,20 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
         component_info_a := world.component_stores.component_info[a]
         component_info_b := world.component_stores.component_info[b]
 
-        sparse_set_a := world.component_stores.component_sparse[component_info_a.sparse_index]
-        sparse_set_b := world.component_stores.component_sparse[component_info_b.sparse_index]
-
-        total_modification_count := sparse_set_a.modification_count + sparse_set_b.modification_count
-
         defer {
             internal_component_sparse_mod_zeroed(&world.component_stores.component_sparse[component_info_a.sparse_index])
             internal_component_sparse_mod_zeroed(&world.component_stores.component_sparse[component_info_b.sparse_index])
         }
 
+        group_count_target := component_info_a.sparse_index + component_info_b.sparse_index
+
+        sparse_set_a := world.component_stores.component_sparse[component_info_a.sparse_index]
+        sparse_set_b := world.component_stores.component_sparse[component_info_b.sparse_index]
+
+        total_modification_count := sparse_set_a.modification_count + sparse_set_b.modification_count
+
         //Group_a and Group_b indicies are shared so we can use either.
         group_index := component_info_a.group_indices[0]
-
-        group_count_target := component_info_a.sparse_index + component_info_b.sparse_index
 
         //Creating and re-grouping components.
         if world.component_stores.groups[group_index].count != group_count_target{
@@ -632,7 +643,6 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
             entities_b := internal_sparse_fetch_entities(&sparse_set_b)
             minimum_entites := len(entities_a) < len(entities_b) ? entities_a : entities_b 
 
-            //We will do a chucking apporach.
             for len(minimum_entites) > 0{
                 target_chunk_size := min(len(minimum_entites), chunk_size)
                 current_entity_chunks, next_entity_chunks := slice.split_at(minimum_entites, target_chunk_size)
@@ -641,6 +651,7 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
                 //Potential Hot Path
                 for entity in current_entity_chunks{
                     group_start_entity_a := entities_a[group.start]
+
                     group_start_entity_b := entities_b[group.start]
 
                     sparse_index_a := internal_sparse_get_index(&sparse_set_a, entity)
@@ -662,31 +673,35 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
         world = world,
         index = 0,
         len = group.start,
-        sparse_indices = {component_info_a.sparse_index, component_info_b.sparse_index},
+
+        a_sparse_index = component_info_a.sparse_index,
+        b_sparse_index = component_info_b.sparse_index,
     }
 }
 
 @(private)
 query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk_size : int) -> Query_3(a, b, c)
     where chunk_size > 2 && chunk_size % 2 == 0 && c != a && c != b #no_bounds_check{ 
-
-        component_info_c := world.component_stores.component_info[c]
         ab_query := query_2(world, a, b, chunk_size)
 
-        sparse_set_a := world.component_stores.component_sparse[ab_query.sparse_indices[0]]
-        sparse_set_b := world.component_stores.component_sparse[ab_query.sparse_indices[1]]
-        
-        sparse_set_c := world.component_stores.component_sparse[component_info_c.sparse_index]
-
-        total_modification_count := sparse_set_c.modification_count
+        component_info_a := world.component_stores.component_info[a]
+        component_info_b := world.component_stores.component_info[b]
+        component_info_c := world.component_stores.component_info[c]
 
         defer internal_component_sparse_mod_zeroed(&world.component_stores.component_sparse[component_info_c.sparse_index])
 
-        //|A,B| |C|
+        target_count := component_info_a.sparse_index + component_info_b.sparse_index + component_info_c.sparse_index
+
+        sparse_set_a := world.component_stores.component_sparse[component_info_a.sparse_index]
+        sparse_set_b := world.component_stores.component_sparse[component_info_b.sparse_index]
+
+        sparse_set_c := world.component_stores.component_sparse[component_info_c.sparse_index]
+
+        total_modification_count := sparse_set_a.modification_count + sparse_set_b.modification_count + sparse_set_c.modification_count 
 
         sub_group_index := component_info_c.group_indices[1]
 
-        if world.component_stores.groups[sub_group_index].count != component_info_c.sparse_index{
+        if world.component_stores.groups[sub_group_index].count != target_count{
             removed_sub_group_index := internal_unregister_group(&world.component_stores, Group_Type.SubGroup, {a,b,c})
             sub_group_index = internal_register_group(&world.component_stores, Group_Type.SubGroup,{a,b,c},removed_sub_group_index)
 
@@ -694,7 +709,7 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
         } 
         
         sub_group := &world.component_stores.groups[sub_group_index]
-        sub_group.count = component_info_c.sparse_index
+        sub_group.count = target_count
 
         if total_modification_count > 0 && ab_query.len > 0{
             sub_group.start = 0
@@ -704,17 +719,19 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
             
             entities_c := internal_sparse_fetch_entities(&sparse_set_c)
 
+            //TODO: khal switch to minimum entities and possibly chunking to handle if the minimum entities length is very large 
             for entity in entities_c{
-                group_start_entity_a := entities_a[sub_group.start]
-                group_start_entity_b := entities_b[sub_group.start]
-                group_start_entity_c := entities_c[sub_group.start]
+                sub_group_start_entity_a := entities_a[sub_group.start]
+                sub_group_start_entity_b := entities_b[sub_group.start]
+
+                sub_group_start_entity_c := entities_c[sub_group.start]
 
                 sparse_index := internal_sparse_get_index(&sparse_set_a, entity)
                 is_valid := normalize_value(sparse_index)
 
-                internal_sparse_swap(&sparse_set_a, group_start_entity_a, entity, a, is_valid)
-                internal_sparse_swap(&sparse_set_b, group_start_entity_b, entity, b, is_valid)
-                internal_sparse_swap(&sparse_set_c, group_start_entity_c, entity, c, is_valid)
+                internal_sparse_swap(&sparse_set_a, sub_group_start_entity_a, entity, a, is_valid)
+                internal_sparse_swap(&sparse_set_b, sub_group_start_entity_b, entity, b, is_valid)
+                internal_sparse_swap(&sparse_set_c, sub_group_start_entity_c, entity, c, is_valid)
 
                 sub_group.start += is_valid
             }
@@ -722,117 +739,101 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
 
         return Query_3(a, b, c){
             world = world,
+            index = 0,
             len = sub_group.start,
-            sparse_indices = {ab_query.sparse_indices[0], ab_query.sparse_indices[1], component_info_c.sparse_index},
+
+            a_sparse_index = ab_query.a_sparse_index,
+            b_sparse_index = ab_query.b_sparse_index,
+            c_sparse_index = component_info_c.sparse_index,
         }
 }
 
 @(private)
 query_4 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $d : typeid, $chunk_size : int) -> Query_4(a,b,c,d) 
     where chunk_size > 2 && chunk_size % 2 == 0 #no_bounds_check{
+        ab_query := query_2(world, a,b, chunk_size)
+        cd_query := query_2(world, c,d, chunk_size)
 
-        unimplemented("Implement using sub grouping with grouping")
+        component_info_a := world.component_stores.component_info[a]
+        component_info_b := world.component_stores.component_info[b]
 
-    // component_info_a := &world.component_stores.component_info[a]
-    // component_info_b := &world.component_stores.component_info[b]
-    // component_info_c := &world.component_stores.component_info[c]
-    // component_info_d := &world.component_stores.component_info[d]
+        component_info_c := world.component_stores.component_info[c]
+        component_info_d := world.component_stores.component_info[d]
 
-    // defer{
-    //     component_info_a.flags = {.Sync, .Created}
-    //     component_info_b.flags = {.Sync, .Created}
-    //     component_info_c.flags = {.Sync, .Created}
-    //     component_info_d.flags = {.Sync, .Created}
-    // }
+        target_count := (component_info_a.sparse_index + component_info_b.sparse_index) + (component_info_c.sparse_index + component_info_d.sparse_index)
 
-    // group_index := component_info_a.group_indices[0]
-    // group := &world.component_stores.groups[group_index]
+        sparse_set_a := world.component_stores.component_sparse[component_info_a.sparse_index]
+        sparse_set_b := world.component_stores.component_sparse[component_info_b.sparse_index]
 
-    // group_count_target := (component_info_a.sparse_index + component_info_b.sparse_index) + (component_info_c.sparse_index + component_info_d.sparse_index)
+        sparse_set_c := world.component_stores.component_sparse[component_info_c.sparse_index]
+        sparse_set_d := world.component_stores.component_sparse[component_info_d.sparse_index]
 
-    // if group.count != group_count_target{
-    //     group_index_a := internal_unregister_group(&world.component_stores, a)
-    //     group_index_b := internal_unregister_group(&world.component_stores, b)
-    //     group_index_c := internal_unregister_group(&world.component_stores, c)
-    //     group_index_d := internal_unregister_group(&world.component_stores, d)
+        total_modification_count := (sparse_set_a.modification_count + sparse_set_b.modification_count) + (sparse_set_c.modification_count + sparse_set_d.modification_count)
 
-    //     group_index = max(group_index_a, group_index_b, group_index_c, group_index_d)
+        sub_group_index := component_info_d.group_indices[1]
 
-    //     group_index = internal_register_group(&world.component_stores, {a,b,c,d}, group_index)
-    //     group^ = world.component_stores.groups[group_index]
-    //     group.count = group_count_target
+        if world.component_stores.groups[sub_group_index].count != target_count{
+            removed_sub_group_index := internal_unregister_group(&world.component_stores, Group_Type.SubGroup, {a,b,c,d})
+            sub_group_index = internal_register_group(&world.component_stores, Group_Type.SubGroup, {a,b,c,d}, removed_sub_group_index)
 
-    //     component_info_a.flags = { .Created}
-    //     component_info_b.flags = { .Created}
-    //     component_info_c.flags = { .Created}
-    //     component_info_d.flags = { .Created}
+            total_modification_count += 1
+        }
 
-    // }
+        sub_group := &world.component_stores.groups[sub_group_index]
+        sub_group.count = target_count
+
+        if total_modification_count > 0 && ab_query.len > 0 && cd_query.len > 0 {
+            sub_group.start = 0
+
+            entities_a := internal_sparse_fetch_entities_upto(&sparse_set_a, ab_query.len)
+            entities_b := internal_sparse_fetch_entities_upto(&sparse_set_b, ab_query.len)
+
+            entities_c := internal_sparse_fetch_entities_upto(&sparse_set_c, cd_query.len)
+            entities_d := internal_sparse_fetch_entities_upto(&sparse_set_d, cd_query.len)
+            
+            minimum_entites := ab_query.len < cd_query.len ? entities_a : entities_c
+
+            //TODO:khal use chunking iteration to handle if the minimum entities length is very large 
+            for entity in minimum_entites{
+                sub_group_start_entity_a := entities_a[sub_group.start]
+                sub_group_start_entity_b := entities_b[sub_group.start]
+
+                sub_group_start_entity_c := entities_c[sub_group.start]
+                sub_group_start_entity_d := entities_d[sub_group.start]
+
+                group_a_sparse_index := internal_sparse_get_index(&sparse_set_a, entity)
+                group_b_sparse_index := internal_sparse_get_index(&sparse_set_c, entity)
+                is_valid := normalize_value(group_a_sparse_index | group_b_sparse_index)
 
 
-    // if .Sync not_in component_info_a.flags || .Sync not_in component_info_b.flags || .Sync not_in component_info_c.flags || .Sync not_in component_info_d.flags{
-    //     group.start = 0
+                internal_sparse_swap(&sparse_set_a, sub_group_start_entity_a, entity, a, is_valid)
+                internal_sparse_swap(&sparse_set_b, sub_group_start_entity_b, entity, b, is_valid)
+                internal_sparse_swap(&sparse_set_c, sub_group_start_entity_c, entity, c, is_valid)
+                internal_sparse_swap(&sparse_set_d, sub_group_start_entity_d, entity, d, is_valid)
 
-    //     sparse_set_a := world.component_stores.component_sparse[component_info_a.sparse_index]
-    //     sparse_set_b := world.component_stores.component_sparse[component_info_b.sparse_index]
-    //     sparse_set_c := world.component_stores.component_sparse[component_info_c.sparse_index]
-    //     sparse_set_d := world.component_stores.component_sparse[component_info_d.sparse_index]
-        
-    //     entities_a := internal_sparse_fetch_entities(&sparse_set_a)
-    //     entities_b := internal_sparse_fetch_entities(&sparse_set_b)
-    //     entities_c := internal_sparse_fetch_entities(&sparse_set_c)
-    //     entities_d := internal_sparse_fetch_entities(&sparse_set_d)
-    //     //TODO:khal get the minimum_entities 
-    //     minimum_entites := entities_a
+                sub_group.start += is_valid
+            }
 
-    //     for len(minimum_entites) > 0{
-    //         target_chunk_size := min(len(minimum_entites), chunk_size)
-    //         first_entity_chunks, next_entity_chunks := slice.split_at(minimum_entites, target_chunk_size)
-    //         minimum_entites = next_entity_chunks
+        }
 
-    //         for entity in first_entity_chunks{
-    //             group_start_entity_a := entities_a[group.start]
-    //             group_start_entity_b := entities_b[group.start]
-    //             group_start_entity_c := entities_c[group.start]
-    //             group_start_entity_d := entities_d[group.start]
-                
-    //             sparse_index_a := internal_sparse_get_index(&sparse_set_a, entity)
-    //             sparse_index_b := internal_sparse_get_index(&sparse_set_b, entity)
-    //             sparse_index_c := internal_sparse_get_index(&sparse_set_c, entity)
-    //             sparse_index_d := internal_sparse_get_index(&sparse_set_d, entity)
+        return Query_4(a,b,c,d){
+            world = world,
+            index = 0,
+            len = sub_group.start,
 
-    //             is_valid := normalize_value((sparse_index_a | sparse_index_b) | (sparse_index_c | sparse_index_d))
-
-    //             a_mask := normalize_value((sparse_index_a & -is_valid) + (-1 - group.start))
-    //             b_mask := normalize_value((sparse_index_b & -is_valid) + (-1 - group.start))
-    //             c_mask := normalize_value((sparse_index_c & -is_valid) + (-1 - group.start))
-    //             d_mask := normalize_value((sparse_index_d & -is_valid) + (-1 - group.start))
-
-    //             internal_sparse_swap(&sparse_set_a, group_start_entity_a, entity, a, a_mask)
-    //             internal_sparse_swap(&sparse_set_b, group_start_entity_b, entity, b, b_mask)
-    //             internal_sparse_swap(&sparse_set_c, group_start_entity_c, entity, c, c_mask)
-    //             internal_sparse_swap(&sparse_set_d, group_start_entity_d, entity, d, d_mask)
-
-    //             group.start += is_valid
-    //         }
-    //     }
-
-    //     component_info_a.flags = {.Sync, .Created}
-    //     component_info_b.flags = {.Sync, .Created}
-    //     component_info_c.flags = {.Sync, .Created}
-    //     component_info_d.flags = {.Sync, .Created}
-    // }
-
-    return Query_4(a,b,c,d){
-    }
+            a_sparse_index = ab_query.a_sparse_index,
+            b_sparse_index = ab_query.b_sparse_index,
+            c_sparse_index = cd_query.a_sparse_index,
+            d_sparse_index = cd_query.b_sparse_index,
+        }
 }
 
 
-run_1 :: proc(query : ^Query_1($a)) -> (iterator : Iter_1(a), idx : int, cond : bool) {
+run_1 :: proc(query : ^Query_1($a)) -> (iterator : Iter_1(a), idx : int, cond : bool) #no_bounds_check {
     
     //TODO:khal optimize this so we only have to get the component dense and entity dense just once
-    iterator.entities = get_id_soa_components(query.world, a)
-    iterator.component_a,_ =get_soa_components(query.world, SOAType(a))
+    iterator.entities = internal_sparse_fetch_entities_upto(&query.world.component_stores.component_sparse[query.a_sparse_index], query.len)
+    iterator.component_a = internal_sparse_fetch_component_upto(&query.world.component_stores.component_sparse[query.a_sparse_index],SOAType(a), query.len)
 
     if cond = query.index < query.len; cond{
         idx = query.index
@@ -846,17 +847,11 @@ run_1 :: proc(query : ^Query_1($a)) -> (iterator : Iter_1(a), idx : int, cond : 
     return
 }
 
-run_2 :: proc(query : ^Query_2($a, $b)) -> (iterator : Iter_2(a,b), idx : int, cond : bool){
-
+run_2 :: proc(query : ^Query_2($a, $b)) -> (iterator : Iter_2(a,b), idx : int, cond : bool) #no_bounds_check{    
     //TODO:khal optimize this so we only have to get the component dense and entity dense just once
-    iterator.entities = get_id_soa_components(query.world, b)
-    iterator.entities = iterator.entities[:query.len]
-
-    iterator.component_a,_ = get_soa_components(query.world, SOAType(a))
-    iterator.component_a = iterator.component_a[:query.len]
-    
-    iterator.component_b,_ = get_soa_components(query.world, SOAType(b))
-    iterator.component_b = iterator.component_b[:query.len]
+    iterator.entities = internal_sparse_fetch_entities_upto(&query.world.component_stores.component_sparse[query.a_sparse_index], query.len)
+    iterator.component_a = internal_sparse_fetch_component_upto(&query.world.component_stores.component_sparse[query.a_sparse_index],SOAType(a), query.len)
+    iterator.component_b = internal_sparse_fetch_component_upto(&query.world.component_stores.component_sparse[query.b_sparse_index],SOAType(b), query.len)
 
     if cond = query.index < query.len; cond{
         idx = query.index
@@ -870,19 +865,12 @@ run_2 :: proc(query : ^Query_2($a, $b)) -> (iterator : Iter_2(a,b), idx : int, c
     return
 }
 
-run_3 :: proc(query : ^Query_3($a, $b, $c)) -> (iterator : Iter_3(a,b,c), idx : int, cond : bool){
+run_3 :: proc(query : ^Query_3($a, $b, $c)) -> (iterator : Iter_3(a,b,c), idx : int, cond : bool) #no_bounds_check{
     //TODO:khal optimize this so we only have to get the component dense and entity dense just once
-    iterator.entities = get_id_soa_components(query.world, a)
-    iterator.entities = iterator.entities[:query.len]
-
-    iterator.component_a,_ = get_soa_components(query.world, SOAType(a))
-    iterator.component_a = iterator.component_a[:query.len]
-
-    iterator.component_b, _ = get_soa_components(query.world, SOAType(b))
-    iterator.component_b = iterator.component_b[:query.len]
-
-    iterator.component_c, _ = get_soa_components(query.world, SOAType(c))
-    iterator.component_c = iterator.component_c[:query.len]
+    iterator.entities = internal_sparse_fetch_entities_upto(&query.world.component_stores.component_sparse[query.a_sparse_index], query.len)
+    iterator.component_a = internal_sparse_fetch_component_upto(&query.world.component_stores.component_sparse[query.a_sparse_index],SOAType(a), query.len)
+    iterator.component_b = internal_sparse_fetch_component_upto(&query.world.component_stores.component_sparse[query.b_sparse_index],SOAType(b), query.len)
+    iterator.component_c = internal_sparse_fetch_component_upto(&query.world.component_stores.component_sparse[query.c_sparse_index],SOAType(c), query.len)
 
 
     if cond = query.index < query.len; cond{
@@ -898,22 +886,14 @@ run_3 :: proc(query : ^Query_3($a, $b, $c)) -> (iterator : Iter_3(a,b,c), idx : 
     return
 }
 
-run_4 :: proc(query : ^Query_4($a, $b, $c, $d)) -> (iterator : Iter_4(a,b,c,d), idx : int, cond : bool){
+run_4 :: proc(query : ^Query_4($a, $b, $c, $d)) -> (iterator : Iter_4(a,b,c,d), idx : int, cond : bool) #no_bounds_check{
      //TODO:khal optimize this so we only have to get the component dense and entity dense just once
-     iterator.entities = get_id_soa_components(query.world, a)
-     iterator.entities = iterator.entities[:query.len]
- 
-     iterator.component_a,_ = get_soa_components(query.world, SOAType(a))
-     iterator.component_a = iterator.component_a[:query.len]
- 
-     iterator.component_b, _ = get_soa_components(query.world, SOAType(b))
-     iterator.component_b = iterator.component_b[:query.len]
- 
-     iterator.component_c, _ = get_soa_components(query.world, SOAType(c))
-     iterator.component_c = iterator.component_c[:query.len]
-   
-     iterator.component_d, _ = get_soa_components(query.world, SOAType(d))
-     iterator.component_d = iterator.component_d[:query.len]
+     iterator.entities = internal_sparse_fetch_entities_upto(&query.world.component_stores.component_sparse[query.a_sparse_index], query.len)
+     iterator.component_a = internal_sparse_fetch_component_upto(&query.world.component_stores.component_sparse[query.a_sparse_index],SOAType(a), query.len)
+     iterator.component_b = internal_sparse_fetch_component_upto(&query.world.component_stores.component_sparse[query.b_sparse_index],SOAType(b), query.len)
+     iterator.component_c = internal_sparse_fetch_component_upto(&query.world.component_stores.component_sparse[query.c_sparse_index],SOAType(c), query.len)
+     iterator.component_d = internal_sparse_fetch_component_upto(&query.world.component_stores.component_sparse[query.d_sparse_index],SOAType(d), query.len)
+
 
      if cond = query.index < query.len; cond{
         idx = query.index
@@ -931,5 +911,3 @@ run_4 :: proc(query : ^Query_4($a, $b, $c, $d)) -> (iterator : Iter_4(a,b,c,d), 
 query :: proc{query_1, query_2, query_3, query_4}
 
 run :: proc{run_1, run_2, run_3, run_4}
-
-//////////////////////////////////////////////////////////
