@@ -9,7 +9,7 @@ Currently It is works, but still on heavy WIP
 - Unlimitied amount of component can be added
 - Very minimal Only does what it needs and nothing more.
 - SOA component dense array
-- Extremely fast grouping and sub grouping iteration (eg. Entity with position and scale)
+- Extremely fast grouping and sub grouping query (eg. Entity with position and scale)
 
 **Future Features**
 - Reduced memory consumption on sparse array
