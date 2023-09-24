@@ -1,8 +1,6 @@
 package journey
 
 import "core:slice"
-import "core:runtime"
-import "core:fmt"
 import "core:intrinsics"
 import "core:mem"
 
@@ -501,7 +499,7 @@ internal_sparse_fetch_entities_upto :: #force_inline proc(component_sparse : $S/
 }
 
 @(private)
-internal_sparse_swap :: #force_inline proc(component_sparse : $S/^$ComponentSparse, #any_int dst_entity, src_entity : int, $component_type : typeid, mask : int = 1) #no_bounds_check{
+internal_sparse_swap :: #force_inline proc(component_sparse : $S/^$ComponentSparse, #any_int dst_entity, src_entity : int, $component_type : typeid, neg_mask : int = -1) #no_bounds_check{
     soa_component_slice := (cast(^#soa[]component_type)(component_sparse.component_blob))
     sparse_slice := ([^]int)(component_sparse.sparse_blob)
     entity_slice := ([^]u32)(component_sparse.entity_blob)
@@ -509,10 +507,10 @@ internal_sparse_swap :: #force_inline proc(component_sparse : $S/^$ComponentSpar
     dst_id := internal_sparse_get_index(component_sparse, dst_entity) 
     src_id := internal_sparse_get_index(component_sparse, src_entity)
     
-    target_src_entity := src_entity * mask
-    target_dst_entity := dst_entity * mask
-    target_src_id := src_id * mask
-    target_dst_id := dst_id * mask
+    target_src_entity := src_entity & neg_mask
+    target_dst_entity := dst_entity & neg_mask
+    target_src_id := src_id & neg_mask
+    target_dst_id := dst_id & neg_mask
 
     sparse_slice[target_dst_entity], sparse_slice[target_src_entity] = sparse_slice[target_src_entity], sparse_slice[target_dst_entity]
 
@@ -658,8 +656,8 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
                     sparse_index_b := internal_sparse_get_index(&sparse_set_b, entity)
 
                     is_valid := normalize_value(sparse_index_a | sparse_index_b)
-                    a_mask := normalize_value((sparse_index_a & -is_valid) +(-1 - group.start))
-                    b_mask := normalize_value((sparse_index_b & -is_valid) +(-1 - group.start))
+                    a_mask := -normalize_value((sparse_index_a & -is_valid) +(-1 - group.start))
+                    b_mask := -normalize_value((sparse_index_b & -is_valid) +(-1 - group.start))
                
                     internal_sparse_swap(&sparse_set_a, group_start_entity_a, entity, a, a_mask)
                     internal_sparse_swap(&sparse_set_b, group_start_entity_b, entity, b, b_mask)
@@ -718,22 +716,32 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
             entities_b := internal_sparse_fetch_entities_upto(&sparse_set_b, ab_query.len)
             
             entities_c := internal_sparse_fetch_entities(&sparse_set_c)
+            minimum_entites := len(entities_c) < len(entities_a) ? entities_c : entities_a
 
-            //TODO: khal switch to minimum entities and possibly chunking to handle if the minimum entities length is very large 
-            for entity in entities_c{
-                sub_group_start_entity_a := entities_a[sub_group.start]
-                sub_group_start_entity_b := entities_b[sub_group.start]
+            for len(minimum_entites) > 0{
+                target_chunk_size := min(len(minimum_entites), chunk_size)
+                current_entity_chunks, next_entity_chunks := slice.split_at(minimum_entites, target_chunk_size)
+                minimum_entites = next_entity_chunks
+                
+                for entity in current_entity_chunks{
 
-                sub_group_start_entity_c := entities_c[sub_group.start]
+                    sparse_group_index := internal_sparse_get_index(&sparse_set_a, entity)
+                    sparse_sub_group_index := internal_sparse_get_index(&sparse_set_c,entity)
+                    //we negate it since sparse swap mask represent -1 as true and 0 as false
+                    is_valid := -normalize_value(sparse_group_index | sparse_sub_group_index)
 
-                sparse_index := internal_sparse_get_index(&sparse_set_a, entity)
-                is_valid := normalize_value(sparse_index)
+                    sub_group_start_entity_a := entities_a[sub_group.start]
+                    sub_group_start_entity_b := entities_b[sub_group.start]
+    
+                    sub_group_start_entity_c := entities_c[sub_group.start]
 
-                internal_sparse_swap(&sparse_set_a, sub_group_start_entity_a, entity, a, is_valid)
-                internal_sparse_swap(&sparse_set_b, sub_group_start_entity_b, entity, b, is_valid)
-                internal_sparse_swap(&sparse_set_c, sub_group_start_entity_c, entity, c, is_valid)
+                    internal_sparse_swap(&sparse_set_a, sub_group_start_entity_a, entity, a, is_valid)
+                    internal_sparse_swap(&sparse_set_b, sub_group_start_entity_b, entity, b, is_valid)
+                    internal_sparse_swap(&sparse_set_c, sub_group_start_entity_c, entity, c, is_valid)
+    
+                    sub_group.start -= is_valid
 
-                sub_group.start += is_valid
+                }
             }
         }
 
@@ -793,27 +801,33 @@ query_4 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $d : t
             
             minimum_entites := ab_query.len < cd_query.len ? entities_a : entities_c
 
-            //TODO:khal use chunking iteration to handle if the minimum entities length is very large 
-            for entity in minimum_entites{
-                sub_group_start_entity_a := entities_a[sub_group.start]
-                sub_group_start_entity_b := entities_b[sub_group.start]
+            for len(minimum_entites) > 0{
+                target_chunk_size := min(len(minimum_entites), chunk_size)
+                current_entity_chunks, next_entity_chunks := slice.split_at(minimum_entites, target_chunk_size)
+                minimum_entites = next_entity_chunks
 
-                sub_group_start_entity_c := entities_c[sub_group.start]
-                sub_group_start_entity_d := entities_d[sub_group.start]
+                for entity in current_entity_chunks{
+                    group_a_sparse_index := internal_sparse_get_index(&sparse_set_a, entity)
+                    group_b_sparse_index := internal_sparse_get_index(&sparse_set_c, entity)
 
-                group_a_sparse_index := internal_sparse_get_index(&sparse_set_a, entity)
-                group_b_sparse_index := internal_sparse_get_index(&sparse_set_c, entity)
-                is_valid := normalize_value(group_a_sparse_index | group_b_sparse_index)
+                    //we negate it since sparse swap mask represent -1 as true and 0 as false
+                    is_valid := -normalize_value(group_a_sparse_index | group_b_sparse_index)
+    
+                    sub_group_start_entity_a := entities_a[sub_group.start]
+                    sub_group_start_entity_b := entities_b[sub_group.start]
+    
+                    sub_group_start_entity_c := entities_c[sub_group.start]
+                    sub_group_start_entity_d := entities_d[sub_group.start]
+    
+                    internal_sparse_swap(&sparse_set_a, sub_group_start_entity_a, entity, a, is_valid)
+                    internal_sparse_swap(&sparse_set_b, sub_group_start_entity_b, entity, b, is_valid)
+                    internal_sparse_swap(&sparse_set_c, sub_group_start_entity_c, entity, c, is_valid)
+                    internal_sparse_swap(&sparse_set_d, sub_group_start_entity_d, entity, d, is_valid)
+    
+                    sub_group.start -= is_valid
 
-
-                internal_sparse_swap(&sparse_set_a, sub_group_start_entity_a, entity, a, is_valid)
-                internal_sparse_swap(&sparse_set_b, sub_group_start_entity_b, entity, b, is_valid)
-                internal_sparse_swap(&sparse_set_c, sub_group_start_entity_c, entity, c, is_valid)
-                internal_sparse_swap(&sparse_set_d, sub_group_start_entity_d, entity, d, is_valid)
-
-                sub_group.start += is_valid
+                }
             }
-
         }
 
         return Query_4(a,b,c,d){
@@ -911,3 +925,5 @@ run_4 :: proc(query : ^Query_4($a, $b, $c, $d)) -> (iterator : Iter_4(a,b,c,d), 
 query :: proc{query_1, query_2, query_3, query_4}
 
 run :: proc{run_1, run_2, run_3, run_4}
+
+//////////////////////////////////////////////////////////
