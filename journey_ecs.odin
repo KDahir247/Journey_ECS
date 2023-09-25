@@ -3,13 +3,14 @@ package journey
 import "core:slice"
 import "core:intrinsics"
 import "core:mem"
+import "core:math"
 
 ////////////////////////////// ECS Constant /////////////////////////////
 
 DEFAULT_CAPACITY :: 32
 DEFAULT_COMPONENT_SPARSE :: 32
 DEFAULT_GROUP :: 32
-
+DEFAULT_ENTITY_PAGE :: 64
 ////////////////////////////// ECS Resource ////////////////////////////
 Resources :: struct{
     //
@@ -54,81 +55,67 @@ where intrinsics.type_is_struct(component_type){
     internal_register_component(&world.component_stores, component_type)
 }
 
-set_soa_component :: proc(world : $W/^$World, entity : u32, component : $E)
+set_soa_component :: proc(world : $W/^$World, entity : uint, component : $E)
 where intrinsics.type_is_struct(E){
-    if intrinsics.expect(internal_entity_is_alive(&world.entities_stores, entity), true){ //TODO:khal remove for something better.
-        internal_increment_version(&world.entities_stores, entity)//TODO: khal swap for something better.
-        sparse_index := world.component_stores.component_info[E].sparse_index
-        internal_sparse_put(&world.component_stores.component_sparse[sparse_index],entity,component)
-    }
+    // will be negative and array index cant be negative so it will terminate code if entity is invalid
+    sparse_index := world.component_stores.component_info[E].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity) 
+    internal_sparse_put(&world.component_stores.component_sparse[sparse_index],entity,component)
 }
 
-get_soa_component :: proc(world : $W/^$World, entity : u32, $component_type : typeid) -> component_type
+get_soa_component :: proc(world : $W/^$World, entity : uint, $component_type : typeid) -> component_type
 where intrinsics.type_is_struct(component_type){
-    if intrinsics.expect(internal_entity_is_alive(&world.entities_stores, entity), true){ //TODO:khal remove for something better.
-        internal_increment_version(&world.entities_stores, entity)//TODO: khal swap for something better.
-        sparse_index := world.component_stores.component_info[component_type].sparse_index
-        return internal_sparse_get(&world.component_stores.component_sparse[sparse_index], entity, component_type) 
-    }
-    return component_type{}
+    // will be negative and array index cant be negative so it will terminate code if entity is invalid
+    sparse_index := world.component_stores.component_info[component_type].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity) 
+    return internal_sparse_get(&world.component_stores.component_sparse[sparse_index], entity, component_type) 
 }
 
-has_soa_component :: proc(world : $W/^$World, entity : u32, $component_type : typeid) -> bool
+has_soa_component :: proc(world : $W/^$World, entity : uint, $component_type : typeid) -> bool
 where intrinsics.type_is_struct(component_type){
-    if intrinsics.expect(internal_entity_is_alive(&world.entities_stores, entity), true){ //TODO:khal remove for something better. 
-        internal_increment_version(&world.entities_stores, entity)//TODO: khal swap for something better.
-        sparse_index := world.component_stores.component_info[component_type].sparse_index
-        return internal_sparse_has(&world.component_stores.component_sparse[sparse_index], entity) == 1 
-    }
+    // will be negative and array index cant be negative so it will terminate code if entity is invalid
+    sparse_index := world.component_stores.component_info[component_type].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity) 
+    return internal_sparse_has(&world.component_stores.component_sparse[sparse_index], entity) == 1 
 
-    return false
 }
 
-add_soa_component :: proc(world : $W/^$World, entity : u32, component : $E)
+add_soa_component :: proc(world : $W/^$World, entity : uint, component : $E)
 where intrinsics.type_is_struct(E){ 
-    if intrinsics.expect(internal_entity_is_alive(&world.entities_stores, entity), true){ //TODO: khal remove for something better.
-        internal_increment_version(&world.entities_stores, entity) //TODO: khal swap for something better.
-        
-        component_info := world.component_stores.component_info[E]
-        internal_sparse_push(&world.component_stores.component_sparse[component_info.sparse_index], entity, component)
-    }   
+    // will be negative and array index cant be negative so it will terminate code if entity is invalid
+    sparse_index := world.component_stores.component_info[E].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity)
+    internal_sparse_push(&world.component_stores.component_sparse[sparse_index], entity, component)
+   
 }
 
-remove_soa_component :: proc(world : $W/^$World, entity : u32, $component_type : typeid)
+remove_soa_component :: proc(world : $W/^$World, entity : uint, $component_type : typeid)
 where intrinsics.type_is_struct(component_type){
-    if intrinsics.expect(internal_entity_is_alive(&world.entities_stores, entity), true){ //TODO:khal remove for something better.
-
-        internal_increment_version(&world.entities_stores, entity)//TODO: khal swap for something better.
-        
-        component_info := world.component_stores.component_info[component_type]
-        internal_sparse_remove(&world.component_stores.component_sparse[component_info.sparse_index],entity,component_type)
-    }
+    // will be negative and array index cant be negative so it will terminate code if entity is invalid
+    sparse_index := world.component_stores.component_info[component_type].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity)
+    internal_sparse_remove(&world.component_stores.component_sparse[sparse_index],entity,component_type)
 }
 
 
-get_soa_component_with_id :: proc(world : $W/^$World, $component_type : typeid/SOAType($E)) -> (entity_slice: []u32,soa_slice :# soa[]E, length : int)
+get_soa_component_with_id :: proc(world : $W/^$World, $component_type : typeid/SOAType($E)) -> (entity_slice: []uint,soa_slice :# soa[]E, length : int)
 where intrinsics.type_is_struct(E){
     soa_slice, length = get_soa_components(world, component_type)
     entity_slice = get_id_soa_components(world, E)
     return
 }
 
-get_id_soa_components :: proc(world : $W/^$World, $component_type : typeid) -> []u32
+get_id_soa_components :: proc(world : $W/^$World, $component_type : typeid) -> []uint
 where intrinsics.type_is_struct(component_type){
-    sparse_index := world.component_stores.component_info[component_type].sparse_index
+    sparse_index := world.component_stores.component_info[component_type].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity)
     return internal_sparse_fetch_entities(&world.component_stores.component_sparse[sparse_index])
 } 
 
 
 get_soa_components :: proc(world : $W/^$World, $component_type : typeid/SOAType($E)) -> (soa_slice :# soa[]E, length : int) 
 where intrinsics.type_is_struct(E){
-    sparse_index := world.component_stores.component_info[E].sparse_index
+    sparse_index := world.component_stores.component_info[E].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity)
     soa_slice, length = internal_sparse_fetch_components(& world.component_stores.component_sparse[sparse_index], component_type)
     return
 }
 
 
-create_entity :: proc(world : $W/^$World) -> u32{
+create_entity :: proc(world : $W/^$World) -> uint{
     return internal_create_entity(&world.entities_stores)
 }
 
@@ -142,18 +129,21 @@ remove_entity :: proc(world : $W/^$World, entity : u32){
 //////////////////////// Entity Store /////////////////////////////
 
 EntityStore :: struct { 
-    entities : [dynamic]u32,
-    available_to_recycle : int,
-    next_recycle : u32,
-    __padding1__ : u32,
-    __padding2__ : u32,
+     entities : [dynamic]int,
+     current_page : uint,
+    // entities : [dynamic]u32,
+    // available_to_recycle : int,
+    // next_recycle : u32,
+    // __padding1__ : u32,
+    // __padding2__ : u32,
 }
 
 @(private)
 init_entity_store :: proc() -> EntityStore{
 
     entity_store := EntityStore{
-        entities = make([dynamic]u32, 0,DEFAULT_CAPACITY),
+        entities = make([dynamic]int, 1,DEFAULT_CAPACITY),
+        current_page = 0,
     }
     
     return entity_store
@@ -164,52 +154,63 @@ init_entity_store :: proc() -> EntityStore{
 deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
     delete(entity_store.entities)
 }
-@(private)
-internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> u32{
-    entity : u32 = entity_store.next_recycle
-
-   if entity_store.available_to_recycle > 0{
-
-    entity_store.next_recycle = entity_store.entities[entity] >> 16
-    entity_store.entities[entity] = (entity + 1)  << 16
-    entity_store.available_to_recycle -= 1
-
-   }else{
-    entity = u32(len(entity_store.entities)) //TODO:khal optimize
-
-    append(&entity_store.entities, (entity + 1) << 16)
-   }
-
-   return entity
-}
 
 @(private)
-internal_destroy_entity :: proc(entity_store : $E/^$EntityStore, entity : u32) #no_bounds_check{
-    entity_store.entities[entity] += 1
-    entity_store.available_to_recycle += 1
-
-    entity_store.next_recycle = entity 
-}
-
-@(private)
-internal_entity_is_valid :: #force_inline proc(entity_store : $E/^$EntityStore, entity : u32) -> int{
-    return u32(len(entity_store.entities) -1) > entity ? 1 : 0
-}
-
-@(private)
-internal_entity_is_alive :: #force_inline proc(entity_store : $E/^$EntityStore, entity : u32) -> bool #no_bounds_check{
-    entity_detail := entity_store.entities[entity] 
-    return(entity_detail & 0xFF) == (entity_detail >> 8) & 0xFF 
-}
-
-@(private)
-internal_increment_version :: #force_inline proc(entity_store : $E/^$EntityStore, entity : u32){
-    entity_store.entities[entity] += 257
-
-    if entity_store.entities[entity] & 0xFF == 0xFF{
-        entity_store.entities[entity] &= 0xFF_FF_00_00
+internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
+    if entity_store.entities[entity_store.current_page] == -1{
+        append(&entity_store.entities, 0)
+        entity_store.current_page += 1
     }
+    
+    offset := entity_store.current_page * DEFAULT_ENTITY_PAGE
+        
+    entity_bits := entity_store.entities[entity_store.current_page]
+
+    entity_id :uint= uint(64 - intrinsics.count_leading_zeros(entity_bits))
+
+    entity_store.entities[entity_store.current_page] |= 1 << entity_id
+
+    return entity_id + offset
 }
+
+@(private)
+internal_entity_valid_mask :: #force_inline proc(entity_store : $E/^$EntityStore, entity : uint) -> int{
+    target_page := entity >> 6
+
+    mask := (entity_store.entities[target_page] >> entity) & 1
+    remap_mask := (mask << 1) - 1
+
+    return remap_mask
+}
+
+// @(private)
+// internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> u32{
+//     entity : u32 = entity_store.next_recycle
+
+//    if entity_store.available_to_recycle > 0{
+
+//     entity_store.next_recycle = entity_store.entities[entity] >> 16
+//     entity_store.entities[entity] = (entity + 1)  << 16
+//     entity_store.available_to_recycle -= 1
+
+//    }else{
+//     entity = u32(len(entity_store.entities)) //TODO:khal optimize
+
+//     append(&entity_store.entities, (entity + 1) << 16)
+//    }
+
+//    return entity
+// }
+
+// @(private)
+// internal_destroy_entity :: proc(entity_store : $E/^$EntityStore, entity : u32) #no_bounds_check{
+//     entity_store.entities[entity] += 1
+//     entity_store.available_to_recycle += 1
+
+//     entity_store.next_recycle = entity 
+// }
+
+
 /////////////////////////////////////////////////////////////////
 
 ///////////////////////// ECS Group /////////////////////////////
