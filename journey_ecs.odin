@@ -3,7 +3,6 @@ package journey
 import "core:slice"
 import "core:intrinsics"
 import "core:mem"
-import "core:math"
 
 ////////////////////////////// ECS Constant /////////////////////////////
 
