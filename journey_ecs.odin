@@ -9,7 +9,6 @@ DEFAULT_CAPACITY :: 32
 DEFAULT_COMPONENT_SPARSE :: 32
 DEFAULT_GROUP :: 32
 
-
 PAGE_SIZE :uint: 64
 PAGE_BIT :uint: intrinsics.count_trailing_zeros(PAGE_SIZE)
 PAGE_INDEX :uint: PAGE_SIZE - 1
@@ -324,6 +323,8 @@ internal_sparse_deinit :: proc(sparse_array :  $SA/^$SparseArray){
     delete(sparse_array.sparse)
 }
 
+//TODO:khal maybe add internal_sparse_allocate_at_bulk to handle internal_sparse_push_bulk implementation
+
 @(private)
 internal_sparse_allocate_at :: proc(sparse_array : $SA/^$SparseArray, entity : uint){
     page := internal_fetch_page(entity)
@@ -339,6 +340,7 @@ internal_sparse_allocate_at :: proc(sparse_array : $SA/^$SparseArray, entity : u
     }
 }
 
+
 @(private)
 internal_sparse_has_index :: #force_inline proc(sparse_array : $SA/^$SparseArray, #any_int entity : uint) -> int{
     page := int(internal_fetch_page(entity))
@@ -348,9 +350,9 @@ internal_sparse_has_index :: #force_inline proc(sparse_array : $SA/^$SparseArray
 
         if sparse_page != nil{
             page_id := internal_fetch_page_index(entity)
-            sparse_id := ([^]uint)(sparse_page.?)[page_id]
+            sparse_id := ([^]int)(sparse_page.?)[page_id]
     
-            return int(sparse_id - 1)
+            return sparse_id - 1
         }
     }
 
@@ -359,22 +361,22 @@ internal_sparse_has_index :: #force_inline proc(sparse_array : $SA/^$SparseArray
 }
 
 @(private)
-internal_sparse_get_index :: #force_inline proc(sparse_array : $SA/^$SparseArray, #any_int entity : uint) -> uint{
+internal_sparse_get_index :: #force_inline proc(sparse_array : $SA/^$SparseArray, #any_int entity : uint) -> int{
     page := internal_fetch_page(entity)
     page_id := internal_fetch_page_index(entity)
 
     sparse_page := sparse_array.sparse[page].?
-    sparse_id := ([^]uint)(sparse_page)[page_id]
+    sparse_id := ([^]int)(sparse_page)[page_id]
     return sparse_id - 1
 }
 
 @(private)
-internal_sparse_put_index :: #force_inline proc(sparse_array : $SA/^$SparseArray, entity : uint, value : uint){
+internal_sparse_put_index :: #force_inline proc(sparse_array : $SA/^$SparseArray, entity : uint, value : int){
     page := internal_fetch_page(entity)
     page_id := internal_fetch_page_index(entity)
 
     sparse_page := sparse_array.sparse[page].?
-    ([^]uint)(sparse_page)[page_id] = value
+    ([^]int)(sparse_page)[page_id] = value
 }
 
 @(private)
@@ -457,7 +459,7 @@ internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, entity : u
     entity_data[component_sparse.len] = entity
     component_sparse.len = next_sparse_len
 
-    internal_sparse_put_index(&component_sparse.sparse_array, entity, uint(next_sparse_len))
+    internal_sparse_put_index(&component_sparse.sparse_array, entity, next_sparse_len)
     
     component_sparse.modification_count += 1
 }
@@ -545,13 +547,13 @@ internal_sparse_swap :: #force_inline proc(component_sparse : $S/^$ComponentSpar
     soa_component_slice := (cast(^#soa[]component_type)(component_sparse.component_blob))
     entity_slice := ([^]uint)(component_sparse.entity_blob)
 
-    dst_id := internal_sparse_get_index(&component_sparse.sparse_array, uint(dst_entity)) 
-    src_id := internal_sparse_get_index(&component_sparse.sparse_array, uint(src_entity))
+    dst_id := internal_sparse_get_index(&component_sparse.sparse_array, dst_entity) 
+    src_id := internal_sparse_get_index(&component_sparse.sparse_array,src_entity)
     
     target_src_entity := int(src_entity) & neg_mask
     target_dst_entity := int(dst_entity) & neg_mask
-    target_src_id := int(src_id) & neg_mask
-    target_dst_id := int(dst_id) & neg_mask
+    target_src_id := src_id & neg_mask
+    target_dst_id := dst_id & neg_mask
 
     internal_sparse_swap_index(&component_sparse.sparse_array, uint(target_dst_entity),uint(target_src_entity))
 
@@ -692,8 +694,8 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
                     group_start_entity_a := entities_a[group.start]
                     group_start_entity_b := entities_b[group.start]
 
-                    sparse_index_a := int(internal_sparse_get_index(&sparse_set_a.sparse_array, entity))
-                    sparse_index_b := int(internal_sparse_get_index(&sparse_set_b.sparse_array, entity))
+                    sparse_index_a :=internal_sparse_get_index(&sparse_set_a.sparse_array, entity)
+                    sparse_index_b := internal_sparse_get_index(&sparse_set_b.sparse_array, entity)
 
                     is_valid := normalize_value(sparse_index_a|sparse_index_b)
 
@@ -767,8 +769,8 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
                 
                 for entity in current_entity_chunks{
 
-                    sparse_group_index := int(internal_sparse_get_index(&sparse_set_a.sparse_array, entity))
-                    sparse_sub_group_index := int(internal_sparse_get_index(&sparse_set_c.sparse_array, entity))
+                    sparse_group_index := internal_sparse_get_index(&sparse_set_a.sparse_array, entity)
+                    sparse_sub_group_index := internal_sparse_get_index(&sparse_set_c.sparse_array, entity)
                     //we negate it since sparse swap mask represent -1 as true and 0 as false
                     is_valid := -normalize_value(sparse_group_index | sparse_sub_group_index)
 
@@ -849,8 +851,8 @@ query_4 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $d : t
                 minimum_entites = next_entity_chunks
 
                 for entity in current_entity_chunks{
-                    group_a_sparse_index := int(internal_sparse_get_index(&sparse_set_a.sparse_array, entity))
-                    group_b_sparse_index := int(internal_sparse_get_index(&sparse_set_c.sparse_array, entity))
+                    group_a_sparse_index := internal_sparse_get_index(&sparse_set_a.sparse_array, entity)
+                    group_b_sparse_index := internal_sparse_get_index(&sparse_set_c.sparse_array, entity)
 
                     //we negate it since sparse swap mask represent -1 as true and 0 as false
                     is_valid := -normalize_value(group_a_sparse_index | group_b_sparse_index)
