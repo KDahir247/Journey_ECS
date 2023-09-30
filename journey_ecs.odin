@@ -159,6 +159,7 @@ init_entity_store :: proc() -> EntityStore{
 @(private)
 deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
     delete(entity_store.entities)
+    delete(entity_store.removed_indicies)
 }
 
 @(private)
