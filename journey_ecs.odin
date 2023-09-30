@@ -3,6 +3,8 @@ package journey
 import "core:slice"
 import "core:intrinsics"
 import "core:mem"
+import "core:sys/llvm"
+
 ////////////////////////////// ECS Constant /////////////////////////////
 
 DEFAULT_CAPACITY :: 32
@@ -116,22 +118,29 @@ where intrinsics.type_is_struct(E){
     return
 }
 
-
 create_entity :: proc(world : $W/^$World) -> uint{
     return internal_create_entity(&world.entities_stores)
 }
 
 
-remove_entity :: proc(world : $W/^$World, entity : u32){
-    unimplemented("TODO: khal implement this")
+remove_entity :: proc(world : $W/^$World, entity : uint){
+    //remove all the component
+    // for index in 0..<len(world.component_stores.component_sparse){
+    //     if internal_sparse_has(&world.component_stores.component_sparse[index], entity) == 1{
+    //         //We need to remove the component
+    //         //internal_sparse_remove(&world.component_stores.component_sparse[index], entity)
+    //     }
+    // }
+
+    internal_remove_entity(&world.entities_stores,entity)
 }
 
 ///////////////////////////////////////////////////////////////////
 
 //////////////////////// Entity Store /////////////////////////////
-
 EntityStore :: struct { 
      entities : [dynamic]int,
+     removed_indicies : [dynamic]uint,
      current_index : uint,
 }
 
@@ -140,13 +149,13 @@ init_entity_store :: proc() -> EntityStore{
 
     entity_store := EntityStore{
         entities = make([dynamic]int, 1,DEFAULT_CAPACITY),
+        removed_indicies = make([dynamic]uint, 0, DEFAULT_CAPACITY),
         current_index = 0,
     }
     
     return entity_store
 }
 
-//GOOD
 @(private)
 deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
     delete(entity_store.entities)
@@ -155,18 +164,57 @@ deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
 @(private)
 internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
     if entity_store.entities[entity_store.current_index] == -1{
-        append(&entity_store.entities, 0)
+        append_nothing(&entity_store.entities)
         entity_store.current_index += 1
     }
+
+    if len(entity_store.removed_indicies) <= 0{
+        entity_bits := entity_store.entities[entity_store.current_index]
+        entity_id : uint = uint(64 - intrinsics.count_leading_zeros(entity_bits))
     
-    entity_bits := entity_store.entities[entity_store.current_index]
-    entity_id : uint = uint(64 - intrinsics.count_leading_zeros(entity_bits))
+        entity_store.entities[entity_store.current_index] |= 1 << entity_id
+    
+        entity_offset := entity_store.current_index << 6
+    
+        return entity_id + entity_offset
+    }else{
+        removed_entity_index := entity_store.removed_indicies[0]
+        entity_bit := entity_store.entities[removed_entity_index]
+        current_bit := uint(intrinsics.count_ones(entity_bit))
 
-    entity_store.entities[entity_store.current_index] |= 1 << entity_id
+        mask := (1 << (64 - current_bit)) - 1
+        hi_target_mask := mask << current_bit
+        
+        result :=entity_bit | hi_target_mask
 
-    offset := entity_store.current_index << 6
+        trailing_zero_count := intrinsics.count_trailing_zeros(result)
 
-    return entity_id + offset
+        entity_offset := removed_entity_index << 6
+
+        removed_entity_id := trailing_zero_count > 0 ? uint(trailing_zero_count - 1) : uint(64 - intrinsics.count_leading_zeros(abs(result)) - 1)
+
+        entity_store.entities[removed_entity_index] |= 1 << removed_entity_id
+
+        if entity_store.entities[removed_entity_index] == -1{
+            unordered_remove(&entity_store.removed_indicies, 0)
+        }
+
+        return removed_entity_id + entity_offset
+    }
+
+}
+
+@(private)
+internal_remove_entity :: proc(entity_store : $E/^$EntityStore, entity : uint){
+    page := internal_fetch_page(entity)
+    page_index := internal_fetch_page_index(entity)
+    entity_store.entities[page] &= ~(1 << page_index)
+
+    //Linear search. It shouldn't be to bad for small amount of entity 4096 lower, but higher will need more iteration
+    //Iteration amount is (EntityID + 1) / 64, but this is ok since deleting entity should be called sparingly in a ecs solution
+    if !slice.contains(entity_store.removed_indicies[:], page){
+        append(&entity_store.removed_indicies, page)
+    }
 }
 
 @(private)
@@ -511,7 +559,6 @@ internal_sparse_remove :: proc(component_sparse : $S/^$ComponentSparse, #any_int
     component_sparse.modification_count += 1
 }
 
-//GOOD
 @(private)
 internal_sparse_has :: #force_inline proc(component_sparse : $S/^$ComponentSparse, entity : uint) -> int{
     sparse_val := int(internal_sparse_has_index(&component_sparse.sparse_array, entity)) 
