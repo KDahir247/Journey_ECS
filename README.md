@@ -10,15 +10,12 @@ Currently It is works, but still on heavy WIP
 - Very minimal Only does what it needs and nothing more.
 - SOA component dense array
 - Extremely fast grouping and sub grouping query (eg. Entity with position and scale)
-
-**Future Features**
 - Reduced memory consumption on sparse array
 - Allow upto or more then 1 Million entity. Current max is 65,536 entity (requires re-implementing entity store)
 
-
 **Limitation**
 - small to no checks so undefined behaviour on invalid use (so call register before adding component and make sure when removing a component entity actually has component or call has_component with a if statement)
-- Slighly higher memory due to sparse array with holes 
+- Slighly higher memory due to sparse array with holes (mitigated my using pagination)
 - No shared component model out of the box (this is passed to the user and I don't see this as a limitation)
 - Iterate from first to last, so adding or removing component while iterating may cause invalidation (user can easily add a run function that iterate last to first to resolve this), so adding and removing component should happen outside iterating loop of the same component/s.
 
