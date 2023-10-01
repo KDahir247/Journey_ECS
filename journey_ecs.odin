@@ -161,7 +161,7 @@ get_memory_usage :: proc(world : $W/^$World, component_type : typeid) -> [3]int{
     used_bytes_component := len * total_struct_size
     used_bytes_entity := len * size_of(uint)
 
-    allocated_bytes_component := cap * size_of(component_type)
+    allocated_bytes_component := cap * total_struct_size
     allocated_bytes_entity := cap * size_of(uint)
 
     for page in component_sparse.sparse_array.sparse{
