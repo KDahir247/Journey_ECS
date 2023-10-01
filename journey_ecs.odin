@@ -3,8 +3,9 @@ package journey
 import "core:slice"
 import "core:intrinsics"
 import "core:mem"
-import "core:sys/llvm"
-
+import "core:runtime"
+//remove
+import "core:fmt"
 ////////////////////////////// ECS Constant /////////////////////////////
 
 DEFAULT_CAPACITY :: 32
@@ -31,6 +32,14 @@ normalize_value :: #force_inline proc "contextless" (val : int) -> int{
     return (val >> 63) + 1 //arithemtic shift
 }
 
+//Assuming the the data in the raw_soa is a struct and not a array
+@(private)
+fetch_raw_soa_footer :: #force_inline proc(raw_soa : rawptr, field_count : int) -> (footer : ^runtime.Raw_SOA_Footer_Dynamic_Array){
+    raw_field_count := uintptr(field_count)
+    footer = (^runtime.Raw_SOA_Footer_Dynamic_Array)(uintptr(raw_soa) + raw_field_count * size_of(rawptr))
+    return
+
+} 
 ///////////////////////////////////////////////////////////////////////
 
 ////////////////////////// ECS World //////////////////////////////////
@@ -84,8 +93,9 @@ where intrinsics.type_is_struct(component_type){
 add_soa_component :: proc(world : $W/^$World, entity : uint, component : $E)
 where intrinsics.type_is_struct(E){ 
     // will be negative and array index cant be negative so it will terminate code if entity is invalid
-    sparse_index := world.component_stores.component_info[E].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity)
-    internal_sparse_push(&world.component_stores.component_sparse[sparse_index], entity, component)
+    component_info := world.component_stores.component_info[E]
+    sparse_index := component_info.sparse_index * internal_entity_valid_mask(&world.entities_stores, entity)
+    internal_sparse_push(&world.component_stores.component_sparse[sparse_index], entity, component_info.meta_data.field_count, component)
    
 }
 
@@ -106,8 +116,8 @@ where intrinsics.type_is_struct(E){
 
 get_id_soa_components :: proc(world : $W/^$World, $component_type : typeid) -> []uint
 where intrinsics.type_is_struct(component_type){
-    sparse_index := world.component_stores.component_info[component_type].sparse_index 
-    return internal_sparse_fetch_entities(&world.component_stores.component_sparse[sparse_index])
+    component_info := world.component_stores.component_info[component_type]
+    return internal_sparse_fetch_entities(&world.component_stores.component_sparse[component_info.sparse_index], component_info.meta_data.field_count)
 } 
 
 
@@ -122,19 +132,75 @@ create_entity :: proc(world : $W/^$World) -> uint{
     return internal_create_entity(&world.entities_stores)
 }
 
-
 remove_entity :: proc(world : $W/^$World, entity : uint){
-    //remove all the component
-    // for index in 0..<len(world.component_stores.component_sparse){
-    //     if internal_sparse_has(&world.component_stores.component_sparse[index], entity) == 1{
-    //         //We need to remove the component
-    //         //internal_sparse_remove(&world.component_stores.component_sparse[index], entity)
-    //     }
-    // }
+    for type, component_info in world.component_stores.component_info{
+        if internal_sparse_has(&world.component_stores.component_sparse[component_info.sparse_index], entity) == 1{ // Should we even check?
+            internal_sparse_remove(&world.component_stores.component_sparse[component_info.sparse_index], entity, component_info.meta_data)
+        }
+    }
 
     internal_remove_entity(&world.entities_stores,entity)
 }
 
+//allocated_memory, used_memory, len
+get_memory_usage :: proc(world : $W/^$World, component_type : typeid) -> [3]int{
+    component_info := world.component_stores.component_info[component_type] 
+
+    len := internal_sparse_len(&world.component_stores.component_sparse[component_info.sparse_index], component_info.meta_data.field_count)
+    cap := internal_sparse_cap(&world.component_stores.component_sparse[component_info.sparse_index], component_info.meta_data.field_count)
+
+    component_sparse := world.component_stores.component_sparse[component_info.sparse_index]
+
+    total_struct_size := 0
+    total_bytes_sparse := 0
+
+    for size in component_info.meta_data.field_sizes{
+        total_struct_size += size
+    }
+
+    used_bytes_component := len * total_struct_size
+    used_bytes_entity := len * size_of(uint)
+
+    allocated_bytes_component := cap * size_of(component_type)
+    allocated_bytes_entity := cap * size_of(uint)
+
+    for page in component_sparse.sparse_array.sparse{
+        valid_page, ok := page.?
+
+        if ok{
+            total_bytes_sparse += int(PAGE_INDEX) * size_of(int)
+        }
+    }
+
+    return [3]int{(used_bytes_component + used_bytes_entity) + (total_bytes_sparse + size_of(ComponentSparse)), (allocated_bytes_component + allocated_bytes_entity) + (total_bytes_sparse + size_of(ComponentSparse)), len}
+
+}
+
+//allocated_memory, used_memory
+get_all_memory_usage :: proc(world : $W/^$World) -> [2]int{
+    total_allocated_bytes := 0
+    total_used_bytes := 0
+
+    for component_type, _ in world.component_stores.component_info{
+        component_memory := get_memory_usage(world, component_type)
+
+        total_allocated_bytes += component_memory[0]
+        total_used_bytes += component_memory[1]
+    }
+
+    return [2]int{total_allocated_bytes, total_used_bytes}
+}
+
+sparse_len :: proc(world : $W/^$World, $component_type : typeid) -> int{
+    component_info := world.component_stores.component_info[component_type] 
+    return internal_sparse_len(&world.component_stores.component_sparse[component_info.sparse_index], component_info.meta_data.field_count)
+    
+}
+
+sparse_cap :: proc(world : $W/^$World, $component_type : typeid) -> int{
+    component_info := world.component_stores.component_info[component_type] 
+    return internal_sparse_cap(&world.component_stores.component_sparse[component_info.sparse_index], component_info.meta_data.field_count)
+}
 ///////////////////////////////////////////////////////////////////
 
 //////////////////////// Entity Store /////////////////////////////
@@ -186,7 +252,7 @@ internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
         mask := (1 << (64 - current_bit)) - 1
         hi_target_mask := mask << current_bit
         
-        result :=entity_bit | hi_target_mask
+        result := entity_bit | hi_target_mask
 
         trailing_zero_count := intrinsics.count_trailing_zeros(result)
 
@@ -253,9 +319,17 @@ Group :: struct{
 /////////////////////////////////////////////////////////////////
 
 ///////////////////// Component Store ///////////////////////////
+ComponentMetadata :: struct{
+    field_count : int,
+    field_sizes : []int,
+}
+
 ComponentInfo :: struct{
     group_indices : [2]int,
     sparse_index : int,
+    
+    //Metadata about the struct that is registered 
+    meta_data : ComponentMetadata
 }
 
 ComponentStore :: struct{
@@ -328,8 +402,30 @@ internal_unregister_group :: proc(component_store : $C/^$ComponentStore, $group_
 internal_register_component :: proc(component_store : $C/^$ComponentStore, $component_type : typeid) #no_bounds_check{
     if component_type not_in component_store.component_info{
 
+        field_count :: intrinsics.type_struct_field_count(component_type)
+
+        struct_var_sizes := make([]int, field_count)
+
+        {
+            // We lose alot of detail in the component sparse so we must cache it in component_info
+            // When registering component. This function is called per unique struct type to register so it ok.
+
+            type_info := type_info_of(typeid_of(component_type))
+            type_info = runtime.type_info_base(type_info)
+    
+            struct_info := &type_info.variant.(runtime.Type_Info_Struct)
+    
+            for struct_element_index in 0..<field_count{
+                struct_var_sizes[struct_element_index] = struct_info.types[struct_element_index].size
+            }
+        }
+
         component_store.component_info[component_type] = ComponentInfo{
             sparse_index = len(component_store.component_sparse),
+            meta_data = {
+                field_count = field_count,
+                field_sizes = struct_var_sizes,
+            },
         }
 
         component_sparse := init_component_sparse(component_type)
@@ -344,6 +440,11 @@ deinit_component_store :: proc(component_store : $C/^$ComponentStore){
     }
 
     delete(component_store.component_sparse)
+
+    for _,component in component_store.component_info{
+        delete(component.meta_data.field_sizes)
+    }
+
     delete(component_store.component_info)
     delete(component_store.groups)
 }
@@ -446,7 +547,6 @@ ComponentSparse :: struct {
     component_blob : rawptr, 
     entity_blob : rawptr,
     sparse_array : SparseArray,
-    len : int, 
     modification_count : int, 
 }
 
@@ -465,7 +565,6 @@ init_component_sparse :: proc($type : typeid) -> ComponentSparse{
         sparse_array = sparse_array,
         entity_blob = entity_blob,
         component_blob = component_soa_blob,
-        len = 0,
         modification_count = 0,
     }
 }
@@ -490,25 +589,27 @@ internal_component_sparse_mod_zeroed  :: #force_inline proc(component_sparse : $
 //TODO:khal maybe add internal_sparse_push_bulk to allow multiple entities and component add together. Look at the odin lang https://github.com/odin-lang/Odin/blob/master/core/runtime/core_builtin.odin#L410 for reference.
 
 @(private)
-internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, entity : uint, component : $T) #no_bounds_check{
+internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, entity : uint, field_count : int, component : $T) #no_bounds_check{
     internal_sparse_allocate_at(&component_sparse.sparse_array, entity)
 
-    next_sparse_len := component_sparse.len + 1
+    raw_footer := fetch_raw_soa_footer(component_sparse.component_blob, field_count)
+
+    current_len := raw_footer.len
+
     soa_component_array := cast(^#soa[dynamic]T)(component_sparse.component_blob)
     soa_capacity := cap(soa_component_array)
     
-    if soa_capacity <= next_sparse_len{
+    append_soa_elem(soa_component_array, component)
+
+    if soa_capacity <= raw_footer.len{
         new_capacity := (soa_capacity << 1) + 8
         component_sparse.entity_blob,_ = mem.resize(component_sparse.entity_blob, soa_capacity << 3, new_capacity << 3, 8)
     }
 
-    append_soa_elem(soa_component_array, component)
-
     entity_data := ([^]uint)(component_sparse.entity_blob)
-    entity_data[component_sparse.len] = entity
-    component_sparse.len = next_sparse_len
+    entity_data[current_len] = entity
 
-    internal_sparse_put_index(&component_sparse.sparse_array, entity, next_sparse_len)
+    internal_sparse_put_index(&component_sparse.sparse_array, entity, raw_footer.len)
     
     component_sparse.modification_count += 1
 }
@@ -516,6 +617,7 @@ internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, entity : u
 @(private)
 internal_sparse_get :: proc(component_sparse : $S/^$ComponentSparse, entity : uint, $component_type : typeid) ->  component_type #no_bounds_check {
     dense_index := internal_sparse_get_index(&component_sparse.sparse_array, entity)
+
     return (cast(^#soa[dynamic]component_type)(component_sparse.component_blob))[dense_index]
 }
 
@@ -536,21 +638,59 @@ internal_sparse_put :: proc(component_sparse : $S/^$ComponentSparse,#any_int ent
     soa_component_array[dense_id] = component
 }
 
+//Meta remove is usually used for removing entity and all the components in contains, since we don't know at compile time what components the entity will have through-out the application
+//type remove is usually for removing a component at runtime.
+@(private)
+internal_sparse_remove :: proc{internal_sparse_remove_with_meta,internal_sparse_remove_with_type}
 
 @(private)
-internal_sparse_remove :: proc(component_sparse : $S/^$ComponentSparse, #any_int entity : uint, $component_type : typeid) #no_bounds_check{
+internal_sparse_remove_with_meta :: proc(component_sparse : $S/^$ComponentSparse, #any_int entity : uint, meta_data : ComponentMetadata) #no_bounds_check{
+    dense_id := internal_sparse_get_index(&component_sparse.sparse_array, entity)
+    raw_footer := fetch_raw_soa_footer(component_sparse.component_blob, meta_data.field_count)
+
+    raw_footer.len -= 1
+    
+    {
+        //We store the soa as a ^rawptr so we need to down cast it once 
+        downcasted_soa_raw := (^rawptr)(component_sparse.component_blob)^
+
+        soa_offset := 0
+        for field_index in 0..<meta_data.field_count{
+            current_struct_elem_size := meta_data.field_sizes[field_index]
+
+            dst := rawptr(uintptr(downcasted_soa_raw) + uintptr(soa_offset) + uintptr(current_struct_elem_size * dense_id))
+            src := rawptr(uintptr(downcasted_soa_raw) + uintptr(soa_offset) + uintptr(current_struct_elem_size * raw_footer.len))
+
+            //We will use a mem_copy because of overlapping and not mem_copy_non_overlapping.
+            runtime.mem_copy(dst, src, current_struct_elem_size)
+
+            soa_offset += current_struct_elem_size * raw_footer.cap
+        }
+    }
+    
+    last_entity := ([^]uint)(component_sparse.entity_blob)[raw_footer.len]
+    ent_ptr :^uint = ([^]uint)(component_sparse.entity_blob)[dense_id:]
+    ent_ptr^ = last_entity
+
+    internal_sparse_put_index(&component_sparse.sparse_array, last_entity, dense_id + 1)
+    internal_sparse_put_index(&component_sparse.sparse_array, entity, 0)
+
+    component_sparse.modification_count += 1
+}
+
+@(private)
+internal_sparse_remove_with_type :: proc(component_sparse : $S/^$ComponentSparse, #any_int entity : uint, $component_type : typeid) #no_bounds_check{
     dense_id := internal_sparse_get_index(&component_sparse.sparse_array, entity)
 
     soa_component_array := cast(^#soa[dynamic]component_type)(component_sparse.component_blob)
     raw_footer := raw_soa_footer_dynamic_array(soa_component_array)
     
     raw_footer.len -= 1
-    component_sparse.len -= 1
 
     last_component := soa_component_array[raw_footer.len]
     soa_component_array[dense_id] = last_component
     
-    last_entity := ([^]uint)(component_sparse.entity_blob)[component_sparse.len]
+    last_entity := ([^]uint)(component_sparse.entity_blob)[raw_footer.len]
     ent_ptr :^uint = ([^]uint)(component_sparse.entity_blob)[dense_id:]
     ent_ptr^ = last_entity
 
@@ -569,7 +709,7 @@ internal_sparse_has :: #force_inline proc(component_sparse : $S/^$ComponentSpars
 @(private)
 internal_sparse_fetch_components :: #force_inline proc(component_sparse : $S/^$ComponentSparse, $component_type : typeid/SOAType($E)) -> (soa_slice :#soa[]E, length: int){
     soa_slice = (cast(^#soa[]E)(component_sparse.component_blob))^
-    length = component_sparse.len
+    length = len(soa_slice)
     return
 }
 
@@ -581,8 +721,10 @@ internal_sparse_fetch_component_upto :: #force_inline proc(component_sparse : $S
 }
 
 @(private)
-internal_sparse_fetch_entities :: #force_inline proc(component_sparse : $S/^$ComponentSparse) -> []uint {
-    return ([^]uint)(component_sparse.entity_blob)[:component_sparse.len]
+internal_sparse_fetch_entities :: #force_inline proc(component_sparse : $S/^$ComponentSparse, count : int) -> []uint {
+    raw_footer := fetch_raw_soa_footer(component_sparse.component_blob, count)
+
+    return ([^]uint)(component_sparse.entity_blob)[:raw_footer.len]
 }
 
 @(private)
@@ -609,6 +751,25 @@ internal_sparse_swap :: #force_inline proc(component_sparse : $S/^$ComponentSpar
     soa_component_slice[target_dst_id], soa_component_slice[target_src_id] = soa_component_slice[target_src_id], soa_component_slice[target_dst_id]
     entity_slice[target_dst_id], entity_slice[target_src_id] = entity_slice[target_src_id], entity_slice[target_dst_id]
 }
+
+//This doesn't get the len of the sparse array, but the dense component and entity
+@(private)
+internal_sparse_len :: #force_inline proc(component_sparse : $S/^$ComponentSparse, count : int) -> int{
+    raw_footer := fetch_raw_soa_footer(component_sparse.component_blob, count)
+
+    return raw_footer.len
+}
+
+//This doesn't get the cap of the sparse array, but the dense component and entity
+@(private)
+internal_sparse_cap :: #force_inline proc(component_sparse : $S/^$ComponentSparse, count : int) -> int{
+    raw_footer := fetch_raw_soa_footer(component_sparse.component_blob, count)
+
+    return raw_footer.cap
+}
+
+
+
 
 ///////////////////////////////////////////////////////////
 
@@ -728,8 +889,8 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
         if total_modification_count > 0{
             group.start = 0
   
-            entities_a := internal_sparse_fetch_entities(&sparse_set_a)
-            entities_b := internal_sparse_fetch_entities(&sparse_set_b)
+            entities_a := internal_sparse_fetch_entities(&sparse_set_a, component_info_a.meta_data.field_count)
+            entities_b := internal_sparse_fetch_entities(&sparse_set_b, component_info_a.meta_data.field_count)
             minimum_entites := len(entities_a) < len(entities_b) ? entities_a : entities_b 
 
             for len(minimum_entites) > 0{
@@ -807,7 +968,7 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
             entities_a := internal_sparse_fetch_entities_upto(&sparse_set_a, ab_query.len)
             entities_b := internal_sparse_fetch_entities_upto(&sparse_set_b, ab_query.len)
             
-            entities_c := internal_sparse_fetch_entities(&sparse_set_c)
+            entities_c := internal_sparse_fetch_entities(&sparse_set_c, component_info_c.meta_data.field_count)
             minimum_entites := len(entities_c) < len(entities_a) ? entities_c : entities_a
 
             for len(minimum_entites) > 0{
