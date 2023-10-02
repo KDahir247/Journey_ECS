@@ -4,13 +4,10 @@ import "core:slice"
 import "core:intrinsics"
 import "core:mem"
 import "core:runtime"
-//remove
-import "core:fmt"
 ////////////////////////////// ECS Constant /////////////////////////////
 
-DEFAULT_CAPACITY :: 32
+DEFAULT_STORE_CAPACITY :: 32
 DEFAULT_COMPONENT_SPARSE :: 32
-DEFAULT_GROUP :: 32
 
 PAGE_SIZE :uint: 64
 PAGE_BIT :uint: intrinsics.count_trailing_zeros(PAGE_SIZE)
@@ -20,8 +17,6 @@ PAGE_INDEX :uint: PAGE_SIZE - 1
 Resources :: struct{
     //
 }
-
-SOAType :: struct($T : typeid){}
 ////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////// ECS Utility /////////////////////////////
@@ -32,17 +27,17 @@ normalize_value :: #force_inline proc "contextless" (val : int) -> int{
     return (val >> 63) + 1 //arithemtic shift
 }
 
-//Assuming the the data in the raw_soa is a struct and not a array
 @(private)
 fetch_raw_soa_footer :: #force_inline proc(raw_soa : rawptr, field_count : int) -> (footer : ^runtime.Raw_SOA_Footer_Dynamic_Array){
     raw_field_count := uintptr(field_count)
     footer = (^runtime.Raw_SOA_Footer_Dynamic_Array)(uintptr(raw_soa) + raw_field_count * size_of(rawptr))
     return
-
 } 
 ///////////////////////////////////////////////////////////////////////
 
 ////////////////////////// ECS World //////////////////////////////////
+SOAType :: struct($T : typeid){}
+
 World :: struct{
     entities_stores : EntityStore,
     component_stores : ComponentStore,
@@ -70,39 +65,33 @@ where intrinsics.type_is_struct(component_type){
 
 set_soa_component :: proc(world : $W/^$World, entity : uint, component : $E)
 where intrinsics.type_is_struct(E){
-    // will be negative and array index cant be negative so it will terminate code if entity is invalid
-    sparse_index := world.component_stores.component_info[E].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity) 
+    sparse_index := world.component_stores.component_info[E].sparse_index
     internal_sparse_put(&world.component_stores.component_sparse[sparse_index],entity,component)
 }
 
 get_soa_component :: proc(world : $W/^$World, entity : uint, $component_type : typeid) -> component_type
 where intrinsics.type_is_struct(component_type){
-    // will be negative and array index cant be negative so it will terminate code if entity is invalid
-    sparse_index := world.component_stores.component_info[component_type].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity) 
+    sparse_index := world.component_stores.component_info[component_type].sparse_index 
     return internal_sparse_get(&world.component_stores.component_sparse[sparse_index], entity, component_type) 
 }
 
 has_soa_component :: proc(world : $W/^$World, entity : uint, $component_type : typeid) -> bool
 where intrinsics.type_is_struct(component_type){
-    // will be negative and array index cant be negative so it will terminate code if entity is invalid
-    sparse_index := world.component_stores.component_info[component_type].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity) 
+    sparse_index := world.component_stores.component_info[component_type].sparse_index 
     return internal_sparse_has(&world.component_stores.component_sparse[sparse_index], entity) == 1 
 
 }
 
 add_soa_component :: proc(world : $W/^$World, entity : uint, component : $E)
 where intrinsics.type_is_struct(E){ 
-    // will be negative and array index cant be negative so it will terminate code if entity is invalid
     component_info := world.component_stores.component_info[E]
-    sparse_index := component_info.sparse_index * internal_entity_valid_mask(&world.entities_stores, entity)
-    internal_sparse_push(&world.component_stores.component_sparse[sparse_index], entity, component_info.meta_data.field_count, component)
+    internal_sparse_push(&world.component_stores.component_sparse[component_info.sparse_index], entity, component_info.meta_data.field_count, component)
    
 }
 
 remove_soa_component :: proc(world : $W/^$World, entity : uint, $component_type : typeid)
 where intrinsics.type_is_struct(component_type){
-    // will be negative and array index cant be negative so it will terminate code if entity is invalid
-    sparse_index := world.component_stores.component_info[component_type].sparse_index * internal_entity_valid_mask(&world.entities_stores, entity)
+    sparse_index := world.component_stores.component_info[component_type].sparse_index 
     internal_sparse_remove(&world.component_stores.component_sparse[sparse_index],entity,component_type)
 }
 
@@ -212,10 +201,9 @@ EntityStore :: struct {
 
 @(private)
 init_entity_store :: proc() -> EntityStore{
-
     entity_store := EntityStore{
-        entities = make([dynamic]int, 1,DEFAULT_CAPACITY),
-        removed_indicies = make([dynamic]uint, 0, DEFAULT_CAPACITY),
+        entities = make([dynamic]int, 1,DEFAULT_STORE_CAPACITY),
+        removed_indicies = make([dynamic]uint, 0, DEFAULT_STORE_CAPACITY),
         current_index = 0,
     }
     
@@ -237,36 +225,40 @@ internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
 
     if len(entity_store.removed_indicies) <= 0{
         entity_bits := entity_store.entities[entity_store.current_index]
-        entity_id : uint = uint(64 - intrinsics.count_leading_zeros(entity_bits))
+        entity_id :  = 64 - uint(intrinsics.count_leading_zeros(entity_bits))
     
-        entity_store.entities[entity_store.current_index] |= 1 << entity_id
+        target_entity_bit := 1 << entity_id
+        target_entity_offset := entity_store.current_index << PAGE_BIT
+
+        entity_store.entities[entity_store.current_index] |= target_entity_bit
     
-        entity_offset := entity_store.current_index << 6
-    
-        return entity_id + entity_offset
+        return entity_id + target_entity_offset
     }else{
         removed_entity_index := entity_store.removed_indicies[0]
         entity_bit := entity_store.entities[removed_entity_index]
-        current_bit := uint(intrinsics.count_ones(entity_bit))
 
-        mask := (1 << (64 - current_bit)) - 1
-        hi_target_mask := mask << current_bit
+        entity_bits_count := uint(intrinsics.count_ones(entity_bit))
+
+        mask := (1 << (64 - entity_bits_count)) - 1
+        hi_target_mask := mask << entity_bits_count
         
         result := entity_bit | hi_target_mask
 
-        trailing_zero_count := intrinsics.count_trailing_zeros(result)
+        trailing_removed_entity_id := intrinsics.count_trailing_zeros(result) - 1
+        leading_removed_entity_id := intrinsics.count_leading_zeros(abs(result)) - 63
 
-        entity_offset := removed_entity_index << 6
+        removed_entity_id := uint(trailing_removed_entity_id >= 0 ? trailing_removed_entity_id : leading_removed_entity_id)
 
-        removed_entity_id := trailing_zero_count > 0 ? uint(trailing_zero_count - 1) : uint(64 - intrinsics.count_leading_zeros(abs(result)) - 1)
+        target_entity_bit := 1 << removed_entity_id
+        target_entity_offset := removed_entity_index << PAGE_BIT
 
-        entity_store.entities[removed_entity_index] |= 1 << removed_entity_id
+        entity_store.entities[removed_entity_index] |= target_entity_bit
 
         if entity_store.entities[removed_entity_index] == -1{
             unordered_remove(&entity_store.removed_indicies, 0)
         }
 
-        return removed_entity_id + entity_offset
+        return removed_entity_id + target_entity_offset
     }
 
 }
@@ -294,14 +286,14 @@ internal_fetch_page :: #force_inline proc(entity : uint) -> uint{
     return entity >> PAGE_BIT
 }
 
-@(private)
-internal_entity_valid_mask :: #force_inline proc(entity_store : $E/^$EntityStore, entity : uint) -> int{
-    target_page := internal_fetch_page(entity)
-    mask := (entity_store.entities[target_page] >> entity) & 1
-    remap_mask := (mask << 1) - 1
+// @(private)
+// internal_entity_valid_mask :: #force_inline proc(entity_store : $E/^$EntityStore, entity : uint) -> int{
+//     target_page := internal_fetch_page(entity)
+//     mask := (entity_store.entities[target_page] >> entity) & 1
+//     remap_mask := (mask << 1) - 1
 
-    return remap_mask
-}
+//     return 1 //remap_mask
+// }
 
 /////////////////////////////////////////////////////////////////
 
@@ -333,17 +325,17 @@ ComponentInfo :: struct{
 }
 
 ComponentStore :: struct{
-    component_sparse : [dynamic]ComponentSparse, 
     component_info : map[typeid]ComponentInfo, 
+    component_sparse : [dynamic]ComponentSparse, 
     groups : [dynamic]Group,
 }
 
 @(private)
 init_component_store :: proc() -> ComponentStore #no_bounds_check{
     component_store := ComponentStore{
-        component_sparse = make([dynamic]ComponentSparse, 0, DEFAULT_CAPACITY),
-        component_info = make_map(map[typeid]ComponentInfo, DEFAULT_CAPACITY),
-        groups = make([dynamic]Group, 1, DEFAULT_GROUP),
+        component_info = make_map(map[typeid]ComponentInfo, DEFAULT_STORE_CAPACITY),
+        component_sparse = make([dynamic]ComponentSparse, 0, DEFAULT_STORE_CAPACITY),
+        groups = make([dynamic]Group, 1, DEFAULT_STORE_CAPACITY),
     }
 
     component_store.groups[0] = Group{
@@ -356,8 +348,6 @@ init_component_store :: proc() -> ComponentStore #no_bounds_check{
 
 @(private)
 internal_register_group :: proc(component_store : $C/^$ComponentStore, $group_type :Group_Type, structure_types : []typeid, index : int) -> int #no_bounds_check{
-    group : Group
-
     //if mask index is -1 it mean that there is so free up space so we need to append, thus getting the length of the groups collection
     mask_index := normalize_value(index)
 
@@ -372,9 +362,9 @@ internal_register_group :: proc(component_store : $C/^$ComponentStore, $group_ty
     }
     
     if mask_index == 0{
-        append(&component_store.groups, group)
+        append_nothing(&component_store.groups)
     }else{
-        component_store.groups[group_index] = group
+        component_store.groups[group_index] = {}
     }
 
     return group_index
@@ -401,7 +391,6 @@ internal_unregister_group :: proc(component_store : $C/^$ComponentStore, $group_
 @(private)
 internal_register_component :: proc(component_store : $C/^$ComponentStore, $component_type : typeid) #no_bounds_check{
     if component_type not_in component_store.component_info{
-
         field_count :: intrinsics.type_struct_field_count(component_type)
 
         struct_var_sizes := make([]int, field_count)
@@ -530,7 +519,7 @@ internal_sparse_put_index :: #force_inline proc(sparse_array : $SA/^$SparseArray
 }
 
 @(private)
-internal_sparse_swap_index :: #force_inline proc(sparse_array : $SA/^$SparseArray, dst_entity : uint, src_entity : uint){
+internal_sparse_swap_index ::  proc(sparse_array : $SA/^$SparseArray, dst_entity : uint, src_entity : uint){
     dst_page := internal_fetch_page(dst_entity)
     src_page := internal_fetch_page(src_entity)
 
@@ -617,7 +606,6 @@ internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, entity : u
 @(private)
 internal_sparse_get :: proc(component_sparse : $S/^$ComponentSparse, entity : uint, $component_type : typeid) ->  component_type #no_bounds_check {
     dense_index := internal_sparse_get_index(&component_sparse.sparse_array, entity)
-
     return (cast(^#soa[dynamic]component_type)(component_sparse.component_blob))[dense_index]
 }
 
@@ -723,7 +711,6 @@ internal_sparse_fetch_component_upto :: #force_inline proc(component_sparse : $S
 @(private)
 internal_sparse_fetch_entities :: #force_inline proc(component_sparse : $S/^$ComponentSparse, count : int) -> []uint {
     raw_footer := fetch_raw_soa_footer(component_sparse.component_blob, count)
-
     return ([^]uint)(component_sparse.entity_blob)[:raw_footer.len]
 }
 
@@ -733,7 +720,7 @@ internal_sparse_fetch_entities_upto :: #force_inline proc(component_sparse : $S/
 }
 
 @(private)
-internal_sparse_swap :: #force_inline proc(component_sparse : $S/^$ComponentSparse, dst_entity, src_entity : uint, $component_type : typeid, neg_mask : int = -1) #no_bounds_check{
+internal_sparse_swap :: proc(component_sparse : $S/^$ComponentSparse, dst_entity, src_entity : uint, $component_type : typeid, neg_mask : int = -1) #no_bounds_check{
     soa_component_slice := (cast(^#soa[]component_type)(component_sparse.component_blob))
     entity_slice := ([^]uint)(component_sparse.entity_blob)
 
