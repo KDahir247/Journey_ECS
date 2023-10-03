@@ -1,14 +1,18 @@
 package journey
 
 import "core:slice"
+import "core:runtime"
 import "core:intrinsics"
 import "core:mem"
-import "core:runtime"
+//remove
+import "core:fmt"
 ////////////////////////////// ECS Constant /////////////////////////////
 
 DEFAULT_STORE_CAPACITY :: 32
 DEFAULT_COMPONENT_SPARSE :: 32
 
+UINT_BIT_SIZE :: intrinsics.count_trailing_zeros(uint(size_of(int)))
+ENTITY_BIT_SIZE :: size_of(int) << UINT_BIT_SIZE
 PAGE_SIZE :uint: 64
 PAGE_BIT :uint: intrinsics.count_trailing_zeros(PAGE_SIZE)
 PAGE_INDEX :uint: PAGE_SIZE - 1
@@ -85,7 +89,7 @@ where intrinsics.type_is_struct(component_type){
 add_soa_component :: proc(world : $W/^$World, entity : uint, component : $E)
 where intrinsics.type_is_struct(E){ 
     component_info := world.component_stores.component_info[E]
-    internal_sparse_push(&world.component_stores.component_sparse[component_info.sparse_index], entity, component_info.meta_data.field_count, component)
+    internal_sparse_push(&world.component_stores.component_sparse[component_info.sparse_index], entity, len(component_info.field_sizes), component)
    
 }
 
@@ -124,7 +128,7 @@ create_entity :: proc(world : $W/^$World) -> uint{
 remove_entity :: proc(world : $W/^$World, entity : uint){
     for type, component_info in world.component_stores.component_info{
         if internal_sparse_has(&world.component_stores.component_sparse[component_info.sparse_index], entity) == 1{ // Should we even check?
-            internal_sparse_remove(&world.component_stores.component_sparse[component_info.sparse_index], entity, component_info.meta_data)
+            internal_sparse_remove(&world.component_stores.component_sparse[component_info.sparse_index], component_info.field_sizes, entity)
         }
     }
 
@@ -201,9 +205,12 @@ EntityStore :: struct {
 
 @(private)
 init_entity_store :: proc() -> EntityStore{
+
+    //DEFAULT_STORE_CAPACITY * 64 can be added before resizing entities 
+    //removed_indices will be reserve a small size of the dynamic array, since DEFAULT_STORE_CAPACITY(32) * 64 is large and uncommon to delete 2048 entities
     entity_store := EntityStore{
         entities = make([dynamic]int, 1,DEFAULT_STORE_CAPACITY),
-        removed_indicies = make([dynamic]uint, 0, DEFAULT_STORE_CAPACITY),
+        removed_indicies = make([dynamic]uint, 0, DEFAULT_STORE_CAPACITY >> 4),
         current_index = 0,
     }
     
@@ -225,7 +232,7 @@ internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
 
     if len(entity_store.removed_indicies) <= 0{
         entity_bits := entity_store.entities[entity_store.current_index]
-        entity_id :  = 64 - uint(intrinsics.count_leading_zeros(entity_bits))
+        entity_id :  = ENTITY_BIT_SIZE - uint(intrinsics.count_leading_zeros(entity_bits))
     
         target_entity_bit := 1 << entity_id
         target_entity_offset := entity_store.current_index << PAGE_BIT
@@ -239,7 +246,7 @@ internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
 
         entity_bits_count := uint(intrinsics.count_ones(entity_bit))
 
-        mask := (1 << (64 - entity_bits_count)) - 1
+        mask := (1 << (ENTITY_BIT_SIZE - entity_bits_count)) - 1
         hi_target_mask := mask << entity_bits_count
         
         result := entity_bit | hi_target_mask
@@ -260,7 +267,6 @@ internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
 
         return removed_entity_id + target_entity_offset
     }
-
 }
 
 @(private)
@@ -286,15 +292,6 @@ internal_fetch_page :: #force_inline proc(entity : uint) -> uint{
     return entity >> PAGE_BIT
 }
 
-// @(private)
-// internal_entity_valid_mask :: #force_inline proc(entity_store : $E/^$EntityStore, entity : uint) -> int{
-//     target_page := internal_fetch_page(entity)
-//     mask := (entity_store.entities[target_page] >> entity) & 1
-//     remap_mask := (mask << 1) - 1
-
-//     return 1 //remap_mask
-// }
-
 /////////////////////////////////////////////////////////////////
 
 ///////////////////////// ECS Group /////////////////////////////
@@ -311,17 +308,11 @@ Group :: struct{
 /////////////////////////////////////////////////////////////////
 
 ///////////////////// Component Store ///////////////////////////
-ComponentMetadata :: struct{
-    field_count : int,
-    field_sizes : []int,
-}
-
 ComponentInfo :: struct{
-    group_indices : [2]int,
     sparse_index : int,
+    group_indices : [2]int,
     
-    //Metadata about the struct that is registered 
-    meta_data : ComponentMetadata
+    field_sizes : []int,
 }
 
 ComponentStore :: struct{
@@ -332,10 +323,11 @@ ComponentStore :: struct{
 
 @(private)
 init_component_store :: proc() -> ComponentStore #no_bounds_check{
+    //groups will be reserve a small size of the dynamic array, since groups is only used for query.
     component_store := ComponentStore{
         component_info = make_map(map[typeid]ComponentInfo, DEFAULT_STORE_CAPACITY),
         component_sparse = make([dynamic]ComponentSparse, 0, DEFAULT_STORE_CAPACITY),
-        groups = make([dynamic]Group, 1, DEFAULT_STORE_CAPACITY),
+        groups = make([dynamic]Group, 1, DEFAULT_STORE_CAPACITY >> 2),
     }
 
     component_store.groups[0] = Group{
@@ -348,13 +340,13 @@ init_component_store :: proc() -> ComponentStore #no_bounds_check{
 
 @(private)
 internal_register_group :: proc(component_store : $C/^$ComponentStore, $group_type :Group_Type, structure_types : []typeid, index : int) -> int #no_bounds_check{
-    //if mask index is -1 it mean that there is so free up space so we need to append, thus getting the length of the groups collection
+    group_len := len(component_store.groups)
     mask_index := normalize_value(index)
 
-    invert_mask_index := 1 - mask_index
     target_group_index := 1 + index // if it is zero then we know that we need to append a new group since there is no freed space in the groups collection
+    invert_mask_index := 1 - mask_index
 
-    group_index := (len(component_store.groups) * invert_mask_index) + (target_group_index * mask_index)
+    group_index := (group_len * invert_mask_index) + (target_group_index * mask_index)
 
     for id in structure_types{
         component_info := &component_store.component_info[id]
@@ -363,8 +355,6 @@ internal_register_group :: proc(component_store : $C/^$ComponentStore, $group_ty
     
     if mask_index == 0{
         append_nothing(&component_store.groups)
-    }else{
-        component_store.groups[group_index] = {}
     }
 
     return group_index
@@ -372,12 +362,10 @@ internal_register_group :: proc(component_store : $C/^$ComponentStore, $group_ty
 
 @(private)
 internal_unregister_group :: proc(component_store : $C/^$ComponentStore, $group_type :Group_Type, structure_types : []typeid)  -> int #no_bounds_check{
-    
     component_info := component_store.component_info[structure_types[0]]
     group_index := component_info.group_indices[group_type]
 
-    component_store.groups[group_index].start = 0
-    component_store.groups[group_index].count = 0
+    component_store.groups[group_index] = {}
 
     for id in structure_types{
         component_info := &component_store.component_info[id]
@@ -401,24 +389,19 @@ internal_register_component :: proc(component_store : $C/^$ComponentStore, $comp
 
             type_info := type_info_of(typeid_of(component_type))
             type_info = runtime.type_info_base(type_info)
+            struct_info := type_info.variant.(runtime.Type_Info_Struct)
     
-            struct_info := &type_info.variant.(runtime.Type_Info_Struct)
-    
-            for struct_element_index in 0..<field_count{
-                struct_var_sizes[struct_element_index] = struct_info.types[struct_element_index].size
+            for type, index in struct_info.types{
+                struct_var_sizes[index] = type.size
             }
         }
 
         component_store.component_info[component_type] = ComponentInfo{
             sparse_index = len(component_store.component_sparse),
-            meta_data = {
-                field_count = field_count,
-                field_sizes = struct_var_sizes,
-            },
+            field_sizes = struct_var_sizes,
         }
 
-        component_sparse := init_component_sparse(component_type)
-        append(&component_store.component_sparse, component_sparse)
+        append(&component_store.component_sparse, init_component_sparse(component_type))
     }
 }
 
@@ -431,7 +414,7 @@ deinit_component_store :: proc(component_store : $C/^$ComponentStore){
     delete(component_store.component_sparse)
 
     for _,component in component_store.component_info{
-        delete(component.meta_data.field_sizes)
+        delete(component.field_sizes)
     }
 
     delete(component_store.component_info)
@@ -440,30 +423,27 @@ deinit_component_store :: proc(component_store : $C/^$ComponentStore){
 
 //////////////////////// Sparse Set //////////////////////////
 SparseArray :: struct{
-    sparse : [dynamic]Maybe(rawptr)
+    sparse : [dynamic]rawptr
 }
 
 @(private)
 internal_sparse_init :: proc() -> SparseArray{
-    sparse_array : SparseArray
-    sparse_array.sparse = make([dynamic]Maybe(rawptr))
-    return sparse_array
+    return SparseArray{
+        sparse = make([dynamic]rawptr),
+    }
 }
 
 internal_sparse_deinit :: proc(sparse_array :  $SA/^$SparseArray){
-    for sparse_index in 0..<len(sparse_array.sparse){
-        sparse_page, ok := sparse_array.sparse[sparse_index].?
-
-        if ok{
+    for sparse_page in sparse_array.sparse{
+        if sparse_page != nil{
             free(sparse_page)
         }
-        
     }
+
     delete(sparse_array.sparse)
 }
 
 //TODO:khal maybe add internal_sparse_allocate_at_bulk to handle internal_sparse_push_bulk implementation
-
 @(private)
 internal_sparse_allocate_at :: proc(sparse_array : $SA/^$SparseArray, entity : uint){
     page := internal_fetch_page(entity)
@@ -472,31 +452,27 @@ internal_sparse_allocate_at :: proc(sparse_array : $SA/^$SparseArray, entity : u
         resize(&sparse_array.sparse, int(page + 1))
     } 
 
-    _, ok := sparse_array.sparse[page].?
-
-    if !ok{
-        sparse_array.sparse[page],_ = mem.alloc(int(PAGE_INDEX) << 3)
+    if sparse_array.sparse[page] == nil{
+        sparse_array.sparse[page],_ = mem.alloc(int(PAGE_INDEX) << UINT_BIT_SIZE)
     }
 }
-
 
 @(private)
 internal_sparse_has_index :: #force_inline proc(sparse_array : $SA/^$SparseArray, #any_int entity : uint) -> int{
     page := int(internal_fetch_page(entity))
+    page_id := internal_fetch_page_index(entity)
 
     if len(sparse_array.sparse) > page{
         sparse_page := sparse_array.sparse[page]
 
         if sparse_page != nil{
-            page_id := internal_fetch_page_index(entity)
-            sparse_id := ([^]int)(sparse_page.?)[page_id]
+            sparse_id := ([^]int)(sparse_page)[page_id]
     
             return sparse_id - 1
         }
     }
 
     return -1
-
 }
 
 @(private)
@@ -504,8 +480,7 @@ internal_sparse_get_index :: #force_inline proc(sparse_array : $SA/^$SparseArray
     page := internal_fetch_page(entity)
     page_id := internal_fetch_page_index(entity)
 
-    sparse_page := sparse_array.sparse[page].?
-    sparse_id := ([^]int)(sparse_page)[page_id]
+    sparse_id := ([^]int)(sparse_array.sparse[page])[page_id]
     return sparse_id - 1
 }
 
@@ -514,8 +489,7 @@ internal_sparse_put_index :: #force_inline proc(sparse_array : $SA/^$SparseArray
     page := internal_fetch_page(entity)
     page_id := internal_fetch_page_index(entity)
 
-    sparse_page := sparse_array.sparse[page].?
-    ([^]int)(sparse_page)[page_id] = value
+    ([^]int)(sparse_array.sparse[page])[page_id] = value
 }
 
 @(private)
@@ -526,8 +500,8 @@ internal_sparse_swap_index ::  proc(sparse_array : $SA/^$SparseArray, dst_entity
     dst_page_id := internal_fetch_page_index(dst_entity)
     src_page_id := internal_fetch_page_index(src_entity)
 
-    dst_sparse_page := sparse_array.sparse[dst_page].?
-    src_sparse_page := sparse_array.sparse[src_page].?
+    dst_sparse_page := sparse_array.sparse[dst_page]
+    src_sparse_page := sparse_array.sparse[src_page]
 
     ([^]uint)(dst_sparse_page)[dst_page_id], ([^]uint)(src_sparse_page)[src_page_id] =  ([^]uint)(src_sparse_page)[src_page_id], ([^]uint)(dst_sparse_page)[dst_page_id]
 }
@@ -546,7 +520,7 @@ init_component_sparse :: proc($type : typeid) -> ComponentSparse{
     
     component_soa_blob := (^rawptr)(component_soa_dense)
 
-    entity_blob,_ := mem.alloc(DEFAULT_COMPONENT_SPARSE << 3)
+    entity_blob,_ := mem.alloc(DEFAULT_COMPONENT_SPARSE << UINT_BIT_SIZE)
 
     sparse_array := internal_sparse_init()
 
@@ -592,7 +566,7 @@ internal_sparse_push :: proc(component_sparse : $S/^$ComponentSparse, entity : u
 
     if soa_capacity <= raw_footer.len{
         new_capacity := (soa_capacity << 1) + 8
-        component_sparse.entity_blob,_ = mem.resize(component_sparse.entity_blob, soa_capacity << 3, new_capacity << 3, 8)
+        component_sparse.entity_blob,_ = mem.resize(component_sparse.entity_blob, soa_capacity << UINT_BIT_SIZE, new_capacity << UINT_BIT_SIZE, 8)
     }
 
     entity_data := ([^]uint)(component_sparse.entity_blob)
@@ -620,7 +594,7 @@ internal_sparse_index_entity :: #force_inline proc(component_sparse : $S/^$Compo
 }
 
 @(private)
-internal_sparse_put :: proc(component_sparse : $S/^$ComponentSparse,#any_int entity : uint, component : $T) {
+internal_sparse_put :: proc(component_sparse : $S/^$ComponentSparse, #any_int entity : uint, component : $T) {
     dense_id := internal_sparse_get_index(&component_sparse.sparse_array, entity)
     soa_component_array := cast(^#soa[dynamic]T)(component_sparse.component_blob)
     soa_component_array[dense_id] = component
@@ -632,9 +606,9 @@ internal_sparse_put :: proc(component_sparse : $S/^$ComponentSparse,#any_int ent
 internal_sparse_remove :: proc{internal_sparse_remove_with_meta,internal_sparse_remove_with_type}
 
 @(private)
-internal_sparse_remove_with_meta :: proc(component_sparse : $S/^$ComponentSparse, #any_int entity : uint, meta_data : ComponentMetadata) #no_bounds_check{
+internal_sparse_remove_with_meta :: proc(component_sparse : $S/^$ComponentSparse, field_sizes : []int, #any_int entity : uint) #no_bounds_check{
     dense_id := internal_sparse_get_index(&component_sparse.sparse_array, entity)
-    raw_footer := fetch_raw_soa_footer(component_sparse.component_blob, meta_data.field_count)
+    raw_footer := fetch_raw_soa_footer(component_sparse.component_blob, len(field_sizes))
 
     raw_footer.len -= 1
     
@@ -643,9 +617,7 @@ internal_sparse_remove_with_meta :: proc(component_sparse : $S/^$ComponentSparse
         downcasted_soa_raw := (^rawptr)(component_sparse.component_blob)^
 
         soa_offset := 0
-        for field_index in 0..<meta_data.field_count{
-            current_struct_elem_size := meta_data.field_sizes[field_index]
-
+        for current_struct_elem_size in field_sizes{
             dst := rawptr(uintptr(downcasted_soa_raw) + uintptr(soa_offset) + uintptr(current_struct_elem_size * dense_id))
             src := rawptr(uintptr(downcasted_soa_raw) + uintptr(soa_offset) + uintptr(current_struct_elem_size * raw_footer.len))
 
@@ -691,7 +663,7 @@ internal_sparse_remove_with_type :: proc(component_sparse : $S/^$ComponentSparse
 @(private)
 internal_sparse_has :: #force_inline proc(component_sparse : $S/^$ComponentSparse, entity : uint) -> int{
     sparse_val := int(internal_sparse_has_index(&component_sparse.sparse_array, entity)) 
-    return 1 - (sparse_val >> 31) & 1
+    return 1 - (sparse_val >> 31) & 1 //TODO:khal this seem wrong
 }
 
 @(private)
@@ -754,9 +726,6 @@ internal_sparse_cap :: #force_inline proc(component_sparse : $S/^$ComponentSpars
 
     return raw_footer.cap
 }
-
-
-
 
 ///////////////////////////////////////////////////////////
 
@@ -875,9 +844,8 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
    
         if total_modification_count > 0{
             group.start = 0
-  
-            entities_a := internal_sparse_fetch_entities(&sparse_set_a, component_info_a.meta_data.field_count)
-            entities_b := internal_sparse_fetch_entities(&sparse_set_b, component_info_a.meta_data.field_count)
+            entities_a := internal_sparse_fetch_entities(&sparse_set_a, len(component_info_a.field_sizes))
+            entities_b := internal_sparse_fetch_entities(&sparse_set_b, len(component_info_b.field_sizes))
             minimum_entites := len(entities_a) < len(entities_b) ? entities_a : entities_b 
 
             for len(minimum_entites) > 0{
@@ -955,7 +923,7 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
             entities_a := internal_sparse_fetch_entities_upto(&sparse_set_a, ab_query.len)
             entities_b := internal_sparse_fetch_entities_upto(&sparse_set_b, ab_query.len)
             
-            entities_c := internal_sparse_fetch_entities(&sparse_set_c, component_info_c.meta_data.field_count)
+            entities_c := internal_sparse_fetch_entities(&sparse_set_c, len(component_info_c.field_sizes))
             minimum_entites := len(entities_c) < len(entities_a) ? entities_c : entities_a
 
             for len(minimum_entites) > 0{
@@ -1156,9 +1124,7 @@ run_4 :: proc(query : ^Query_4($a, $b, $c, $d)) -> (iterator : Iter_4(a,b,c,d), 
     return
 }
 
-
 query :: proc{query_1, query_2, query_3, query_4}
-
 run :: proc{run_1, run_2, run_3, run_4}
 
 //////////////////////////////////////////////////////////
