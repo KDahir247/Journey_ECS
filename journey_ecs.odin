@@ -137,15 +137,18 @@ remove_entity :: proc(world : $W/^$World, entity : uint){
 get_memory_usage :: proc(world : $W/^$World, component_type : typeid) -> [3]int{
     component_info := world.component_stores.component_info[component_type] 
 
-    len := internal_sparse_len(&world.component_stores.component_sparse[component_info.sparse_index], component_info.meta_data.field_count)
-    cap := internal_sparse_cap(&world.component_stores.component_sparse[component_info.sparse_index], component_info.meta_data.field_count)
+
+    field_size := len(component_info.field_sizes)
+
+    len := internal_sparse_len(&world.component_stores.component_sparse[component_info.sparse_index], field_size)
+    cap := internal_sparse_cap(&world.component_stores.component_sparse[component_info.sparse_index], field_size)
 
     component_sparse := world.component_stores.component_sparse[component_info.sparse_index]
 
     total_struct_size := 0
     total_bytes_sparse := 0
 
-    for size in component_info.meta_data.field_sizes{
+    for size in component_info.field_sizes{
         total_struct_size += size
     }
 
@@ -156,9 +159,7 @@ get_memory_usage :: proc(world : $W/^$World, component_type : typeid) -> [3]int{
     allocated_bytes_entity := cap * size_of(uint)
 
     for page in component_sparse.sparse_array.sparse{
-        valid_page, ok := page.?
-
-        if ok{
+        if page != nil{
             total_bytes_sparse += int(PAGE_INDEX) * size_of(int)
         }
     }
