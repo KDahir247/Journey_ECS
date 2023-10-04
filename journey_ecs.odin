@@ -185,13 +185,13 @@ get_all_memory_usage :: proc(world : $W/^$World) -> [2]int{
 
 sparse_len :: proc(world : $W/^$World, $component_type : typeid) -> int{
     component_info := world.component_stores.component_info[component_type] 
-    return internal_sparse_len(&world.component_stores.component_sparse[component_info.sparse_index], component_info.meta_data.field_count)
+    return internal_sparse_len(&world.component_stores.component_sparse[component_info.sparse_index], len(component_info.field_sizes))
     
 }
 
 sparse_cap :: proc(world : $W/^$World, $component_type : typeid) -> int{
     component_info := world.component_stores.component_info[component_type] 
-    return internal_sparse_cap(&world.component_stores.component_sparse[component_info.sparse_index], component_info.meta_data.field_count)
+    return internal_sparse_cap(&world.component_stores.component_sparse[component_info.sparse_index], len(component_info.field_sizes))
 }
 ///////////////////////////////////////////////////////////////////
 
@@ -231,40 +231,33 @@ internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
 
     if len(entity_store.removed_indicies) <= 0{
         entity_bits := entity_store.entities[entity_store.current_index]
+
         entity_id :  = ENTITY_BIT_SIZE - uint(intrinsics.count_leading_zeros(entity_bits))
-    
         target_entity_bit := 1 << entity_id
-        target_entity_offset := entity_store.current_index << PAGE_BIT
 
         entity_store.entities[entity_store.current_index] |= target_entity_bit
-    
+
+        target_entity_offset := entity_store.current_index << PAGE_BIT
         return entity_id + target_entity_offset
     }else{
+
         removed_entity_index := entity_store.removed_indicies[0]
-        entity_bit := entity_store.entities[removed_entity_index]
+        entity_bits := entity_store.entities[removed_entity_index]
 
-        entity_bits_count := uint(intrinsics.count_ones(entity_bit))
+        trailing_entity_bit := intrinsics.count_trailing_zeros(entity_bits) - 1
+        invert_trailing_entity_bit := intrinsics.count_trailing_zeros(~entity_bits)
 
-        mask := (1 << (ENTITY_BIT_SIZE - entity_bits_count)) - 1
-        hi_target_mask := mask << entity_bits_count
-        
-        result := entity_bit | hi_target_mask
+        recycled_entity_id := uint(trailing_entity_bit >= 0 ? trailing_entity_bit : invert_trailing_entity_bit)
+        recycled_entity_bit := 1 << recycled_entity_id
 
-        trailing_removed_entity_id := intrinsics.count_trailing_zeros(result) - 1
-        leading_removed_entity_id := intrinsics.count_leading_zeros(abs(result)) - 63
-
-        removed_entity_id := uint(trailing_removed_entity_id >= 0 ? trailing_removed_entity_id : leading_removed_entity_id)
-
-        target_entity_bit := 1 << removed_entity_id
-        target_entity_offset := removed_entity_index << PAGE_BIT
-
-        entity_store.entities[removed_entity_index] |= target_entity_bit
+        entity_store.entities[removed_entity_index] |= recycled_entity_bit
 
         if entity_store.entities[removed_entity_index] == -1{
             unordered_remove(&entity_store.removed_indicies, 0)
         }
 
-        return removed_entity_id + target_entity_offset
+        recycled_entity_offset := removed_entity_index << PAGE_BIT
+        return recycled_entity_id + recycled_entity_offset
     }
 }
 
@@ -589,8 +582,6 @@ internal_sparse_put :: proc(component_sparse : $S/^$ComponentSparse, entity : ui
     soa_component_array[dense_id] = component
 }
 
-//Meta remove is usually used for removing entity and all the components in contains, since we don't know at compile time what components the entity will have through-out the application
-//type remove is usually for removing a component at runtime.
 @(private)
 internal_sparse_remove :: proc{internal_sparse_remove_with_meta,internal_sparse_remove_with_type}
 
@@ -810,10 +801,8 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
 
         total_modification_count := sparse_set_a.modification_count + sparse_set_b.modification_count
 
-        //Group_a and Group_b indicies are shared so we can use either.
         group_index := component_info_a.group_indices[0]
 
-        //Creating and re-grouping components.
         if world.component_stores.groups[group_index].count != group_count_target{
             removed_group_index := internal_unregister_group(&world.component_stores,Group_Type.Group, {a,b})
             group_index = internal_register_group(&world.component_stores,Group_Type.Group, {a,b}, removed_group_index)
@@ -836,7 +825,6 @@ query_2 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $chunk_size : int) 
                 current_entity_chunks, next_entity_chunks := slice.split_at(minimum_entites, target_chunk_size)
                 minimum_entites = next_entity_chunks
 
-                //Potential Hot Path
                 for entity in current_entity_chunks{
                     group_start_entity_a := entities_a[group.start]
                     group_start_entity_b := entities_b[group.start]
@@ -918,7 +906,7 @@ query_3 :: proc(world : $W/^$World,$a : typeid, $b : typeid, $c : typeid, $chunk
 
                     sparse_group_index := internal_sparse_get_index(&sparse_set_a.sparse_array, entity)
                     sparse_sub_group_index := internal_sparse_get_index(&sparse_set_c.sparse_array, entity)
-                    //we negate it since sparse swap mask represent -1 as true and 0 as false
+
                     is_valid := -normalize_value(sparse_group_index | sparse_sub_group_index)
 
                     sub_group_start_entity_a := entities_a[sub_group.start]
