@@ -23,6 +23,7 @@ Currently It is works, but still on heavy WIP
 **Working Progress**
 - Optimization and profile code solution
 - Implement Resource for unique component (1 per unique component)
+- Implement Bulk function (eg. bulk register component, bulk add component)
 
 Example of code 
 ```odin
