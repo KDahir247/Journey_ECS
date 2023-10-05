@@ -8,20 +8,18 @@ Currently It is works, but still on heavy WIP
 - Fast single component iteration & entity iteration (Dense array iteration) 
 - Unlimitied amount of component can be added
 - Very minimal Only does what it needs and nothing more.
-
-**Future Features**
 - SOA component dense array
+- Extremely fast grouping and sub grouping query (eg. Entity with position and scale)
 - Reduced memory consumption on sparse array
-- Allow upto or more then 1 Million entity. Current max is 65,536 entity (requires re-implementing entity store)
-- Extremely fast grouping and sub grouping iteration (eg. Entity with position and scale)
-- Resources
+- Allow upto or more then 1 Million entity
+
 
 **Limitation**
-- Small to no checks on sparse sets so invalid use will cause undefined behaviour (so call register before adding component and make sure when removing a component entity actually has component or call has_component with a if statement. Use has_component when unsure.)
-- Slighly higher memory due to sparse array with holes 
+- small to no checks so undefined behaviour on invalid use (so call register before adding component and make sure when removing a component entity actually has component or call has_component with a if statement)
+- Slighly higher memory due to sparse array with holes (mitigated my using pagination)
 - No shared component model out of the box (this is passed to the user and I don't see this as a limitation)
-- Removing component or adding component on the of the same component type dense array that we are iterating will cause invalidation and problem.
-- No hierarchy model out of the box (this is passed to the user and I don't see this as a limitiation) 
+- Iterate from first to last, so adding or removing component while iterating may cause invalidation (user can easily add a run function that iterate last to first to resolve this), so adding and removing component should happen outside iterating loop of the same component/s.
+
 
 Example of code 
 ```odin
@@ -32,64 +30,85 @@ import ecs "foldername that has this single script"
 main :: proc(){
 
     world := init_world()
- 
-    register(world, string)
-    register(world, f64)
-    register(world, bool)
+    defer deinit_world(world)
 
+    Position :: struct{
+        val : #simd[4]f32,
+    }
+
+    Rotation :: struct{
+        val : #simd[4]f32,
+    }
+
+    Scale :: struct{
+        val : #simd[4]f32,
+    }
+
+    Velocity :: struct{
+        val : #simd[4]f32,
+    }
+
+    register(world, Position)
+    register(world, Rotation)
+    register(world, Scale)
+    register(world, Velocity)
     
-    //Used for fast group component query where entity contain both
-    //group_registry(world, {f64, string})
-    // Used for fast group component query where entity are group by each component group and entities with all the group component are first
-    //subgroup_registry(world, ComponentGroup{component_ids = {f64, string}}, ComponentGroup{ component_ids = {bool} })
-
     entity := create_entity(world)
     entity1 := create_entity(world) 
     entity2 := create_entity(world) 
     entity3 := create_entity(world) 
-    entity4 := create_entity(world) // 4
+    entity4 := create_entity(world)
 
-    add_component(world, entity1, 3.3)
-    add_component(world, entity, 5.4)
-    add_component(world, entity3, 2.4)
+    velocityx := Velocity{
+        val = {1.0, 0.0, 0.0, 0.0},
+    }
 
-    add_component(world,entity4, "Who")
-    add_component(world,entity1, "Hello")
-    add_component(world,entity, "Bob")
-    add_component(world, entity3, "NOOo")
-    
-    add_component(world, entity4, true)
-    add_component(world, entity, true)
-    add_component(world, entity1, true)
+    postion_x := Position{
+        val = {2.0, 0.0, 0.0, 0.0},
+    }
 
-    //Get component allow you to modify the data since it a ptr to the data
-    //Or you can call set component
-    set_component(world, entity, 200.0)
-    fmt.println(get_component(world, entity, f64)^)
-    fmt.println(has_component(world, entity1, string))
+    postion_y := Position{
+        val = {0.0,3.14,0.0,0.0},
+    }
 
-    remove_component(world, entity, string )
-
-    // Bob is removed so when we call these two function 0 is removed from the entity dense array
-    // Bob is removed from the component dense array in the sparse set
-    // and the sparse array at entity is reset. 
-    fmt.println(get_entities_with_component(world, string))
-    fmt.println(get_components_with_id(world, string))
-
-   for float_component in get_components_with_id(world, f64){
-    // logic
-   }
-
-
-   for float_entity in get_entities_with_component(world, f64){
-    // logic
-   }
-
-   // Fast System iteration is a working progress currently for Group and Subgroup
+    position_xy := Position{
+        val = {24.0,7.11,0.0,0.0},
+    }
    
 
-	deinit_world(world)
-    free(world)
+    Quaternion_IDENTITY := Rotation{
+        val = {0.0,0.0,0.0,1.0},
+    }
+
+    add_soa_component(world, entity2, velocityx)
+    add_soa_component(world, entity1, postion_x)
+    add_soa_component(world, entity2, postion_y)
+    add_soa_component(world, entity2, Quaternion_IDENTITY)
+
+    add_soa_component(world, entity, position_xy)
+    add_soa_component(world, entity, Quaternion_IDENTITY)
+
+    postion_scale_query := query(world, Velocity, Scale) //register and sort using group
+    position_rotation_query := query(world, Position, Rotation) //register and sort using group
+
+    position_rotation_query1 := query(world, Position, Rotation) //doesn't register or sort using group uses the cache result
+    postion_scale_query1 := query(world, Velocity, Scale) //doesn't register or sort using group uses the cache result
+    
+   
+     for component_storage, index in run(&position_rotation_query){
+        mut_component_storage := component_storage
+
+        if component_storage.entities[index] == 2{
+            fmt.println("Moving the player entity", component_storage.entities[index] , "Right by 100" )
+            mut_component_storage.component_a[index].val += {100.0, 0.0, 0.0, 0.0}
+        }
+
+        fmt.print(component_storage.entities[index], " :\t")
+        fmt.print(component_storage.component_a[index], "\t")
+        fmt.print(component_storage.component_b[index])
+        fmt.println()
+     }
+     fmt.println("\n")
 
 }
 
