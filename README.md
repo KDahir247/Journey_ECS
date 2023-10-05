@@ -20,6 +20,9 @@ Currently It is works, but still on heavy WIP
 - No shared component model out of the box (this is passed to the user and I don't see this as a limitation)
 - Iterate from first to last, so adding or removing component while iterating may cause invalidation (user can easily add a run function that iterate last to first to resolve this), so adding and removing component should happen outside iterating loop of the same component/s.
 
+**Working Progress**
+- Optimization and profile code solution
+- Implement Resource for unique component (1 per unique component)
 
 Example of code 
 ```odin
