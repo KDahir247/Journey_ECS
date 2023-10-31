@@ -24,6 +24,8 @@ Currently It is works, but still on heavy WIP
 - Optimization and profile code solution
 - Implement Resource for unique component (1 per unique component)
 - Implement Bulk function (eg. bulk register component, bulk add component)
+- Writing Test
+- Simd Iteration, since the data layout is already optimal for SIMD
 
 Example of code 
 ```odin
