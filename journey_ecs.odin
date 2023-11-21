@@ -6,6 +6,9 @@ import "core:intrinsics"
 import "core:mem"
 ////////////////////////////// ECS Constant /////////////////////////////
 
+TOTAL_BLOCK_SIZE :: size_of(World) + size_of(Resources)
+
+
 DEFAULT_STORE_CAPACITY :: 32
 DEFAULT_COMPONENT_SPARSE :: 32
 
@@ -17,8 +20,18 @@ PAGE_INDEX :uint: PAGE_SIZE - 1
 
 ////////////////////////////// ECS Resource ////////////////////////////
 Resources :: struct{
-    //
+    resources : map[typeid]rawptr
 }
+
+@(private)
+deinit_resource :: proc(memory_block : rawptr){
+    memory_bytes:= slice.bytes_from_ptr(memory_block, TOTAL_BLOCK_SIZE - size_of(Resources))
+
+    resource := (^Resources)(raw_data(memory_bytes[size_of(World):]))
+    delete_map(resource.resources)
+
+}
+
 ////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////// ECS Utility /////////////////////////////
@@ -46,7 +59,11 @@ World :: struct{
 }
 
 init_world :: proc() -> ^World{
-    world := new(World)
+    memory_block,_ := runtime.mem_alloc_bytes(TOTAL_BLOCK_SIZE, align_of(World))
+    
+    world := (^World)(raw_data(memory_block[:size_of(World)]))
+    resource := (^Resources)(raw_data(memory_block[size_of(World):]))
+    resource.resources = make_map(map[typeid]rawptr)
 
     world.entities_stores = init_entity_store()
     world.component_stores = init_component_store()
@@ -57,7 +74,9 @@ init_world :: proc() -> ^World{
 deinit_world :: proc(world : $W/^$World){
     deinit_entity_store(&world.entities_stores)
     deinit_component_store(&world.component_stores)
-    free(world)
+    deinit_resource(world)
+
+    runtime.mem_free(world)
 }
 
 register :: proc(world : $W/^$World, $component_type : typeid) 
@@ -205,7 +224,7 @@ init_entity_store :: proc() -> EntityStore{
     //DEFAULT_STORE_CAPACITY * 64 can be added before resizing entities 
     //removed_indices will be reserve a small size of the dynamic array, since DEFAULT_STORE_CAPACITY(32) * 64 is large and uncommon to delete 2048 entities
     entity_store := EntityStore{
-        entities = make([dynamic]int, 1,DEFAULT_STORE_CAPACITY),
+        entities = make([dynamic]int, 1, DEFAULT_STORE_CAPACITY),
         removed_indicies = make([dynamic]uint, 0, DEFAULT_STORE_CAPACITY >> 4),
         current_index = 0,
     }
@@ -1083,5 +1102,3 @@ run_4 :: proc(query : ^Query_4($a, $b, $c, $d)) -> (iterator : Iter_4(a,b,c,d), 
 
 query :: proc{query_1, query_2, query_3, query_4}
 run :: proc{run_1, run_2, run_3, run_4}
-
-//////////////////////////////////////////////////////////
