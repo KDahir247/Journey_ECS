@@ -22,10 +22,12 @@ Currently It is works, but still on heavy WIP
 
 **Working Progress**
 - Optimization and profile code solution
+- Removing un-necessary allocation type (map, dynamic array, slice)
 - Implement Resource for unique component (1 per unique component)
 - Implement Bulk function (eg. bulk register component, bulk add component)
 - Writing Test
 - Simd Iteration, since the data layout is already optimal for SIMD
+- Optimize for memory
 
 Example of code 
 ```odin
