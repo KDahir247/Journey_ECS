@@ -5,9 +5,7 @@ import "core:runtime"
 import "core:intrinsics"
 import "core:mem"
 ////////////////////////////// ECS Constant /////////////////////////////
-
 TOTAL_BLOCK_SIZE :: size_of(World) + size_of(Resources)
-
 
 DEFAULT_STORE_CAPACITY :: 32
 DEFAULT_COMPONENT_SPARSE :: 32
@@ -20,16 +18,52 @@ PAGE_INDEX :uint: PAGE_SIZE - 1
 
 ////////////////////////////// ECS Resource ////////////////////////////
 Resources :: struct{
-    resources : map[typeid]rawptr
+    map_ptr : map[typeid]rawptr
+}
+
+@(private)
+internal_get_resource :: proc(memory_block : rawptr, $resource_type : typeid) -> ^resource_type{
+    resource := (^Resources)(uintptr(memory_block) + TOTAL_BLOCK_SIZE - size_of(Resources))
+
+    return (^resource_type)(resource.map_ptr[resource_type])
+}
+
+@(private)
+internal_contains_resource :: proc(memory_block : rawptr, $resource_type : typeid) -> bool{
+    resource := (^Resources)(uintptr(memory_block) + TOTAL_BLOCK_SIZE - size_of(Resources))
+
+    return resource_type in resource.map_ptr
+}
+
+@(private)
+internal_register_resource :: proc(memory_block : rawptr, $resource_type : typeid){
+    resource := (^Resources)(uintptr(memory_block) + TOTAL_BLOCK_SIZE - size_of(Resources))
+    
+    resource.map_ptr[resource_type] = new(resource_type)
+}
+
+@(private)
+internal_remove_resource :: proc(memory_block : rawptr, $resource_type : typeid){
+    resource := (^Resources)(uintptr(memory_block) + TOTAL_BLOCK_SIZE - size_of(Resources))
+
+    free(target_resource_ptr)
+    delete_key(resource.map_ptr, resource_type)
+}
+
+@(private)
+internal_clear_resource :: proc(memory_block : rawptr){
+    resource := (^Resources)(uintptr(memory_block) + TOTAL_BLOCK_SIZE - size_of(Resources))
+    
+    for _, res_ptr in resource.map_ptr do free(res_ptr)
+    clear(&resource.map_ptr)
 }
 
 @(private)
 deinit_resource :: proc(memory_block : rawptr){
-    memory_bytes:= slice.bytes_from_ptr(memory_block, TOTAL_BLOCK_SIZE - size_of(Resources))
+    resource := (^Resources)(uintptr(memory_block) + TOTAL_BLOCK_SIZE - size_of(Resources))
 
-    resource := (^Resources)(raw_data(memory_bytes[size_of(World):]))
-    delete_map(resource.resources)
-
+    for _,res_ptr in resource.map_ptr do free(res_ptr)
+    delete_map(resource.map_ptr)
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -59,12 +93,9 @@ World :: struct{
 }
 
 init_world :: proc() -> ^World{
-    memory_block,_ := runtime.mem_alloc_bytes(TOTAL_BLOCK_SIZE, align_of(World))
+    memory_block,_ := runtime.mem_alloc(TOTAL_BLOCK_SIZE, align_of(World))
     
     world := (^World)(raw_data(memory_block[:size_of(World)]))
-    resource := (^Resources)(raw_data(memory_block[size_of(World):]))
-    resource.resources = make_map(map[typeid]rawptr)
-
     world.entities_stores = init_entity_store()
     world.component_stores = init_component_store()
 
@@ -75,8 +106,12 @@ deinit_world :: proc(world : $W/^$World){
     deinit_entity_store(&world.entities_stores)
     deinit_component_store(&world.component_stores)
     deinit_resource(world)
+    free(world)
+}
 
-    runtime.mem_free(world)
+register_unique_resource :: proc(world : $W/^$World, $resource_type : typeid)
+where intrinsics.type_is_struct(resource_type){
+    internal_register_resource(world,resource_type)
 }
 
 register :: proc(world : $W/^$World, $component_type : typeid) 
@@ -96,18 +131,30 @@ where intrinsics.type_is_struct(component_type){
     return internal_sparse_get(&world.component_stores.component_sparse[sparse_index], entity, component_type) 
 }
 
+has_unique_resource :: proc(world : $W/^$World, $resource_type : typeid) -> bool
+where intrinsics.type_is_struct(resource_type){
+    internal_contains_resource(world, resource_type)
+}
+
 has_soa_component :: proc(world : $W/^$World, entity : uint, $component_type : typeid) -> bool
 where intrinsics.type_is_struct(component_type){
     sparse_index := world.component_stores.component_info[component_type].sparse_index 
     return internal_sparse_has(&world.component_stores.component_sparse[sparse_index], entity) >= 0
-
 }
 
 add_soa_component :: proc(world : $W/^$World, entity : uint, component : $E)
 where intrinsics.type_is_struct(E){ 
     component_info := world.component_stores.component_info[E]
     internal_sparse_push(&world.component_stores.component_sparse[component_info.sparse_index], entity, len(component_info.field_sizes), component)
-   
+}
+
+clear_unique_resource :: proc(world : $W/^World){
+    internal_clear_resource(world)
+}
+
+remove_unique_resource :: proc(world : $W/^$World, $resource_type : typeid)
+where intrinsics.type_is_struct(resource_type){
+    internal_remove_resource(world, resource_type)
 }
 
 remove_soa_component :: proc(world : $W/^$World, entity : uint, $component_type : typeid)
@@ -116,6 +163,9 @@ where intrinsics.type_is_struct(component_type){
     internal_sparse_remove(&world.component_stores.component_sparse[sparse_index],entity,component_type)
 }
 
+get_unique_resource :: proc(world : $W/^World, $resource_type : typeid) -> ^resource_type{
+    return internal_get_resource(world, resource_type)
+}
 
 get_soa_component_with_id :: proc(world : $W/^$World, $component_type : typeid/SOAType($E)) -> (entity_slice: []uint,soa_slice :# soa[]E, length : int)
 where intrinsics.type_is_struct(E){
@@ -323,7 +373,7 @@ ComponentInfo :: struct{
 }
 
 ComponentStore :: struct{
-    component_info : map[typeid]ComponentInfo, 
+    component_info : map[typeid]ComponentInfo, //TODO:khal remove
     component_sparse : [dynamic]ComponentSparse, 
     groups : [dynamic]Group,
 }
@@ -1102,3 +1152,5 @@ run_4 :: proc(query : ^Query_4($a, $b, $c, $d)) -> (iterator : Iter_4(a,b,c,d), 
 
 query :: proc{query_1, query_2, query_3, query_4}
 run :: proc{run_1, run_2, run_3, run_4}
+
+//////////////////////////////////////////////////////////
