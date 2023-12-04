@@ -35,90 +35,114 @@ package main
 
 import ecs "foldername that has this single script"
 
-main :: proc(){
+main :: proc() {
 
-    world := init_world()
-    defer deinit_world(world)
-
-    Position :: struct{
-        val : #simd[4]f32,
-    }
-
-    Rotation :: struct{
-        val : #simd[4]f32,
+    Position :: struct {
+        val : [2]f32,
     }
 
     Scale :: struct{
-        val : #simd[4]f32,
+        x : f32,
+        y : f32,
     }
 
-    Velocity :: struct{
-        val : #simd[4]f32,
+    GameController :: struct{
+        x : f32,
+        y : f32,
+        //data
     }
 
-    register(world, Position)
-    register(world, Rotation)
-    register(world, Scale)
-    register(world, Velocity)
+    GameStep :: struct{
+        step : f32,
+        //data
+    }
+
+    NPC_POSITION_STORAGE_INDEX :: 0
+    ENEMY_POSITION_STORAGE_INDEX :: 1
+    SCALE_STORAGE_INDEX :: 2
+
+    world := init_world(7,7) // max of 7 sparse storage and 7 group storage
+
+    /*
+        Rather then combined all the component of the same type to a large container
+        We will allow creating the same type component in different storage to allow 
+        Distinction on different type regardless of it being the same struct
+        This will allow faster query if your looking for a specific position and your layout is correct and iteration
+        Eg rather then going over the full position (Player Position, Npc Position, Enemy Position, etc) 
+        Which will take long just to find the player position
+        We can seperate it like so (don't need another struct to make a distinction)
+
+        storage_position_1 = [Player Position_0]
+        storage_position_2 = [Npc Position_0, Npc_Position_1, Npc_Position_2]
+        storage_position_3 = [Enemy_Position_0, Enemy_Position_1, Enemy_Position_2, Enemy_Position_3, Enemy_Position_4]
+        storage_position_4 = [Decal Position_0 .......... Decal Position_1000]
+
+        then we can fetch the storage we need a query using storage id rather then component type
+        this also eliminate needing to use a key value pair for the sparse index ([Key = typeid, Value = sparse_id] aka map reducing our memory allocation and computation cost)
+        we can use the storage_id for the sparse id directly
+
+    */
+
+    register_storage(world, Position) // storage 0
+    register_storage(world, Position) // storage 1
+    register_storage(world, Scale) // storage 2
+
+    npc_0 := create_entity(world)
+    npc_1 := create_entity(world)
+    enemy_2 := create_entity(world)
+    npc_3 := create_entity(world)
+    enemy_4 := create_entity(world)
+    enemy_5 := create_entity(world)
+    remove_entity(world,npc_0)
+    enemy_0 := create_entity(world)
+
+    add_soa_component(world, npc_1, NPC_POSITION_STORAGE_INDEX, Position{val = {100, 200}})
+    add_soa_component(world, npc_3, NPC_POSITION_STORAGE_INDEX, Position{val = {0, 10}})
+
+
+    add_soa_component(world, enemy_0, ENEMY_POSITION_STORAGE_INDEX, Position{val = {1.0, 2.0}})
+    add_soa_component(world, enemy_2, ENEMY_POSITION_STORAGE_INDEX, Position{val = {3, 4}})
+    add_soa_component(world, enemy_4, ENEMY_POSITION_STORAGE_INDEX, Position{val = {5, 6}})
+    add_soa_component(world, enemy_5, ENEMY_POSITION_STORAGE_INDEX, Position{val = {7, 8}})
+    set_soa_component(world, enemy_4, ENEMY_POSITION_STORAGE_INDEX, Position{val = {247, 19}})
     
-    entity := create_entity(world)
-    entity1 := create_entity(world) 
-    entity2 := create_entity(world) 
-    entity3 := create_entity(world) 
-    entity4 := create_entity(world)
+    fmt.println("Before removing component")
+    fmt.println("Enemy Entity ID", enemy_2, "Has Component Position : ", has_soa_component(world, enemy_2, ENEMY_POSITION_STORAGE_INDEX, Position))
+    remove_soa_component(world, enemy_2, ENEMY_POSITION_STORAGE_INDEX, Position)
+    fmt.println("After removing component")
+    fmt.println("Enemy Entity ID", enemy_2, "Has Component Position : ", has_soa_component(world, enemy_2, ENEMY_POSITION_STORAGE_INDEX, Position))
 
-    velocityx := Velocity{
-        val = {1.0, 0.0, 0.0, 0.0},
-    }
-
-    postion_x := Position{
-        val = {2.0, 0.0, 0.0, 0.0},
-    }
-
-    postion_y := Position{
-        val = {0.0,3.14,0.0,0.0},
-    }
-
-    position_xy := Position{
-        val = {24.0,7.11,0.0,0.0},
-    }
-   
-
-    Quaternion_IDENTITY := Rotation{
-        val = {0.0,0.0,0.0,1.0},
-    }
-
-    add_soa_component(world, entity2, velocityx)
-    add_soa_component(world, entity1, postion_x)
-    add_soa_component(world, entity2, postion_y)
-    add_soa_component(world, entity2, Quaternion_IDENTITY)
-
-    add_soa_component(world, entity, position_xy)
-    add_soa_component(world, entity, Quaternion_IDENTITY)
-
-    postion_scale_query := query(world, Velocity, Scale) //register and sort using group
-    position_rotation_query := query(world, Position, Rotation) //register and sort using group
-
-    position_rotation_query1 := query(world, Position, Rotation) //doesn't register or sort using group uses the cache result
-    postion_scale_query1 := query(world, Velocity, Scale) //doesn't register or sort using group uses the cache result
+    fmt.println("\n")
     
-   
-     for component_storage, index in run(&position_rotation_query){
-        mut_component_storage := component_storage
+    fmt.println("NPC EntityIDs :", get_id_soa_components(world, NPC_POSITION_STORAGE_INDEX))
+    fmt.println("NPC Components :", get_soa_components(world, NPC_POSITION_STORAGE_INDEX, SOAType(Position)))
 
-        if component_storage.entities[index] == 2{
-            fmt.println("Moving the player entity", component_storage.entities[index] , "Right by 100" )
-            mut_component_storage.component_a[index].val += {100.0, 0.0, 0.0, 0.0}
-        }
+    fmt.println("Enemy EntityIDs : ", get_id_soa_components(world, ENEMY_POSITION_STORAGE_INDEX))
+    fmt.println("Enemy Components : ", get_soa_components(world, ENEMY_POSITION_STORAGE_INDEX, SOAType(Position)))
 
-        fmt.print(component_storage.entities[index], " :\t")
-        fmt.print(component_storage.component_a[index], "\t")
-        fmt.print(component_storage.component_b[index])
-        fmt.println()
-     }
-     fmt.println("\n")
+    //Resource
+    init_resource(world, [2]typeid{
+        GameController,
+        GameStep,
+    })
 
+    game_controller := (^GameController)(get_resource(world, 0)) // GameController
+    game_step := (^GameStep)(get_resource(world, 1)) // GameStep
+
+
+    game_controller.x += 2
+    game_controller.y += 5
+
+    game_step.step = 60.0 
+
+    fmt.println(game_controller)
+    fmt.println(game_step)
+
+    deinit_resource(world)
+
+    deinit_world(world)
 }
+
 
 ```
 
