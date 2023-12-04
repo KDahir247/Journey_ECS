@@ -8,11 +8,10 @@ Currently It is works, but still on heavy WIP
 - Fast single component iteration & entity iteration (Dense array iteration) 
 - Unlimitied amount of component can be added
 - Very minimal Only does what it needs and nothing more.
-- SOA component dense array
-- Extremely fast grouping and sub grouping query (eg. Entity with position and scale)
+- SOA component dense array\
+- Implement Resource for unique component (1 per unique component)
 - Reduced memory consumption on sparse array
 - Allow upto or more then 1 Million entity
-
 
 **Limitation**
 - small to no checks so undefined behaviour on invalid use (so call register before adding component and make sure when removing a component entity actually has component or call has_component with a if statement)
@@ -22,12 +21,11 @@ Currently It is works, but still on heavy WIP
 
 **Working Progress**
 - Optimization and profile code solution
-- Removing un-necessary allocation type (map, dynamic array, slice)
-- Implement Resource for unique component (1 per unique component)
-- Implement Bulk function (eg. bulk register component, bulk add component)
+- Implement Bulk function 
 - Writing Test
 - Simd Iteration, since the data layout is already optimal for SIMD
-- Optimize for memory
+- Extremely fast grouping and sub grouping query (eg. Entity with position and scale)
+- Rework query system for new changes 
 
 Example of code 
 ```odin
