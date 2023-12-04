@@ -5,13 +5,14 @@ Currently It is works, but still on heavy WIP
 </br>
 
 **Features**
-- Fast single component iteration & entity iteration (Dense array iteration) 
+- Fast single component iteration & entity iteration (dense array iteration) 
 - Unlimitied amount of component can be added
+- Support for duplicate component type in sparse storage 
 - Very minimal Only does what it needs and nothing more.
-- SOA component dense array\
-- Implement Resource for unique component (1 per unique component)
+- SOA component dense array
+- Implement resource for unique component (1 per unique component)
 - Reduced memory consumption on sparse array
-- Allow upto or more then 1 Million entity
+- Allow upto or more then 1 million entity
 
 **Limitation**
 - small to no checks so undefined behaviour on invalid use (so call register before adding component and make sure when removing a component entity actually has component or call has_component with a if statement)
