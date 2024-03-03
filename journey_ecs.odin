@@ -4,6 +4,7 @@ import "core:slice"
 import "core:runtime"
 import "core:intrinsics"
 import "core:mem"
+import "core:fmt"
 ////////////////////////////// ECS Constant /////////////////////////////
 
 DEFAULT_STORE_CAPACITY :: 32
@@ -14,12 +15,6 @@ ENTITY_BIT_SIZE :: size_of(int) << UINT_BIT_SIZE
 PAGE_SIZE :uint: 64
 PAGE_BIT :uint: intrinsics.count_trailing_zeros(PAGE_SIZE)
 PAGE_INDEX :uint: PAGE_SIZE - 1
-
-////////////////////////////// ECS Resource ////////////////////////////
-Resources :: struct{
-    //
-}
-////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////// ECS Utility /////////////////////////////
 
@@ -133,6 +128,10 @@ remove_entity :: proc(world : $W/^$World, entity : uint){
     internal_remove_entity(&world.entities_stores,entity)
 }
 
+get_alive_entites :: proc(world : $W/^$World, allocator := context.temp_allocator) -> []uint{
+    return interanl_fetch_alive_entites(&world.entities_stores, allocator)
+}
+
 //allocated_memory, used_memory, len
 get_memory_usage :: proc(world : $W/^$World, component_type : typeid) -> [3]int{
     component_info := world.component_stores.component_info[component_type] 
@@ -190,6 +189,7 @@ get_soa_component_cap :: proc(world : $W/^$World, $component_type : typeid) -> i
     component_info := world.component_stores.component_info[component_type] 
     return internal_sparse_cap(&world.component_stores.component_sparse[component_info.sparse_index], len(component_info.field_sizes))
 }
+
 ///////////////////////////////////////////////////////////////////
 
 //////////////////////// Entity Store /////////////////////////////
@@ -205,7 +205,7 @@ init_entity_store :: proc() -> EntityStore{
     //DEFAULT_STORE_CAPACITY * 64 can be added before resizing entities 
     //removed_indices will be reserve a small size of the dynamic array, since DEFAULT_STORE_CAPACITY(32) * 64 is large and uncommon to delete 2048 entities
     entity_store := EntityStore{
-        entities = make([dynamic]int, 1,DEFAULT_STORE_CAPACITY),
+        entities = make([dynamic]int, 4,DEFAULT_STORE_CAPACITY),
         removed_indicies = make([dynamic]uint, 0, DEFAULT_STORE_CAPACITY >> 4),
         current_index = 0,
     }
@@ -221,22 +221,21 @@ deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
 
 @(private)
 internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
-    if entity_store.entities[entity_store.current_index] == -1{
-        append_nothing(&entity_store.entities)
-        entity_store.current_index += 1
+    //TODO:khal remove this branch. we will allocate a larger amount into the entities dynamic array rather than just one element (which can store only 64 new entities) we will maybe allocate 8 or more into the dynamic array
+    // and we can increment the current index by doing a bit shift right on the entity_store.entities[entity_store.current_index] which will return 1 if the value of entity_store.entities[entity_store.current_index] is -1 otherwise 0
+    // then we can compare the current index with the entites array and if the current index is larger than we allocate more into the dynamic array following the above statement. This will reduce the branch from being taken and reduce resizing.
+    
+    current_entity_bits := entity_store.entities[entity_store.current_index]
+
+    full_entity_bits_mask := intrinsics.count_ones(current_entity_bits) >> 6
+    entity_store.current_index += uint(full_entity_bits_mask)
+    
+    if entity_store.current_index >= len(entity_store.entities){
+        previous_len := len(entity_store.entities)
+        resize_dynamic_array(&entity_store.entities,previous_len + 4)
     }
 
-    if len(entity_store.removed_indicies) <= 0{
-        entity_bits := entity_store.entities[entity_store.current_index]
-
-        entity_id :  = ENTITY_BIT_SIZE - uint(intrinsics.count_leading_zeros(entity_bits))
-        target_entity_bit := 1 << entity_id
-
-        entity_store.entities[entity_store.current_index] |= target_entity_bit
-
-        target_entity_offset := entity_store.current_index << PAGE_BIT
-        return entity_id + target_entity_offset
-    }else{
+    if len(entity_store.removed_indicies) > 0{
         removed_entity_index := entity_store.removed_indicies[0]
         entity_bits := entity_store.entities[removed_entity_index]
 
@@ -255,6 +254,16 @@ internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
         recycled_entity_offset := removed_entity_index << PAGE_BIT
         return recycled_entity_id + recycled_entity_offset
     }
+
+    entity_bits := entity_store.entities[entity_store.current_index]
+
+    entity_id :  = ENTITY_BIT_SIZE - uint(intrinsics.count_leading_zeros(entity_bits))
+    target_entity_bit := 1 << entity_id
+
+    entity_store.entities[entity_store.current_index] |= target_entity_bit
+
+    target_entity_offset := entity_store.current_index << PAGE_BIT
+    return entity_id + target_entity_offset
 }
 
 @(private)
@@ -268,6 +277,60 @@ internal_remove_entity :: proc(entity_store : $E/^$EntityStore, entity : uint){
     if !slice.contains(entity_store.removed_indicies[:], page){
         append(&entity_store.removed_indicies, page)
     }
+}
+
+@(private)
+interanl_fetch_alive_entites :: proc(entity_store : $E/^$EntityStore, allocator : mem.Allocator) -> []uint{
+    entities := slice.as_ptr(entity_store.entities[:])
+
+    alive_count_0 := 0
+    alive_count_1 := 0
+    alive_count_2 := 0
+    alive_count_3 := 0
+
+    for i := 0; i < len(entity_store.entities); i += 4 {
+        #no_bounds_check{
+            one_bits_0 := intrinsics.count_ones(entities[i])
+            one_bits_1 := intrinsics.count_ones(entities[i + 1])
+            one_bits_2 := intrinsics.count_ones(entities[i + 2])
+            one_bits_3 := intrinsics.count_ones(entities[i + 3])
+            
+            alive_count_0 += one_bits_0
+            alive_count_1 += one_bits_1
+            alive_count_2 += one_bits_2
+            alive_count_3 += one_bits_3
+        }
+    }
+
+    total_alive_entites := (alive_count_0 + alive_count_1) + (alive_count_2 + alive_count_3)
+
+    entity_slice := make_slice([]uint, total_alive_entites, allocator)
+
+    entity_index := 0
+
+    current_bit := entities[0]
+
+    for current_bit != 0 {
+        alive_entity_index := intrinsics.count_trailing_zeros(current_bit)
+        current_bit &= ~(1 << uint(alive_entity_index))
+        entity_slice[entity_index] = uint(alive_entity_index)
+        entity_index += 1
+    }
+
+    for index in 0..<entity_store.current_index{
+        entity_offset := 64 << index
+
+        current_bit := entities[index]
+        for current_bit != 0 {
+            alive_entity_index := intrinsics.count_trailing_zeros(current_bit)
+            current_bit &= ~(1 << uint(alive_entity_index))
+            entity_slice[entity_index] = uint(alive_entity_index)
+            entity_index += 1
+        }
+    }
+
+
+    return entity_slice
 }
 
 @(private)
