@@ -309,11 +309,12 @@ interanl_fetch_alive_entites :: proc(entity_store : $E/^$EntityStore, allocator 
     entity_index := 0
 
     current_bit := entities[0]
-
+    
     for current_bit != 0 {
-        alive_entity_index := intrinsics.count_trailing_zeros(current_bit)
-        current_bit &= ~(1 << uint(alive_entity_index))
-        entity_slice[entity_index] = uint(alive_entity_index)
+        target_entity_bit := (current_bit & -current_bit)
+        target_bit := intrinsics.count_trailing_zeros(target_entity_bit)
+        current_bit ~= target_entity_bit
+        entity_slice[entity_index] = uint(target_bit)
         entity_index += 1
     }
 
@@ -322,9 +323,10 @@ interanl_fetch_alive_entites :: proc(entity_store : $E/^$EntityStore, allocator 
 
         current_bit := entities[index]
         for current_bit != 0 {
-            alive_entity_index := intrinsics.count_trailing_zeros(current_bit)
-            current_bit &= ~(1 << uint(alive_entity_index))
-            entity_slice[entity_index] = uint(alive_entity_index)
+            target_entity_bit := (current_bit & -current_bit)
+            target_bit := intrinsics.count_trailing_zeros(target_entity_bit)
+            current_bit ~=target_entity_bit
+            entity_slice[entity_index] = uint(target_bit) + uint(entity_offset)
             entity_index += 1
         }
     }
@@ -1148,3 +1150,28 @@ query :: proc{query_1, query_2, query_3, query_4}
 run :: proc{run_1, run_2, run_3, run_4}
 
 //////////////////////////////////////////////////////////
+
+main :: proc(){
+
+    world := init_world()
+    defer deinit_world(world)
+
+
+    for a in 0..<64{
+       create_entity(world)
+    }
+
+    for i in 0..<64{
+        if i % 2 == 0{
+            remove_entity(world,uint(i))
+        }
+    }
+
+
+    entites := get_alive_entites(world)
+
+    fmt.println(entites)
+
+
+
+}
