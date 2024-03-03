@@ -35,8 +35,8 @@ import ecs "foldername that has this single script"
 
 main :: proc(){
 
-    world := init_world()
-    defer deinit_world(world)
+    world := ecs.init_world()
+    defer ecs.deinit_world(world)
 
     Position :: struct{
         val : #simd[4]f32,
@@ -54,16 +54,16 @@ main :: proc(){
         val : #simd[4]f32,
     }
 
-    register(world, Position)
-    register(world, Rotation)
-    register(world, Scale)
-    register(world, Velocity)
+    ecs.register(world, Position)
+    ecs.register(world, Rotation)
+    ecs.register(world, Scale)
+    ecs.register(world, Velocity)
     
-    entity := create_entity(world)
-    entity1 := create_entity(world) 
-    entity2 := create_entity(world) 
-    entity3 := create_entity(world) 
-    entity4 := create_entity(world)
+    entity := ecs.create_entity(world)
+    entity1 := ecs.create_entity(world) 
+    entity2 := ecs.create_entity(world) 
+    entity3 := ecs.create_entity(world) 
+    entity4 := ecs.create_entity(world)
 
     velocityx := Velocity{
         val = {1.0, 0.0, 0.0, 0.0},
@@ -86,22 +86,22 @@ main :: proc(){
         val = {0.0,0.0,0.0,1.0},
     }
 
-    add_soa_component(world, entity2, velocityx)
-    add_soa_component(world, entity1, postion_x)
-    add_soa_component(world, entity2, postion_y)
-    add_soa_component(world, entity2, Quaternion_IDENTITY)
+    ecs.add_soa_component(world, entity2, velocityx)
+    ecs.add_soa_component(world, entity1, postion_x)
+    ecs.add_soa_component(world, entity2, postion_y)
+    ecs.add_soa_component(world, entity2, Quaternion_IDENTITY)
 
-    add_soa_component(world, entity, position_xy)
-    add_soa_component(world, entity, Quaternion_IDENTITY)
+    ecs.add_soa_component(world, entity, position_xy)
+    ecs.add_soa_component(world, entity, Quaternion_IDENTITY)
 
-    postion_scale_query := query(world, Velocity, Scale) //register and sort using group
-    position_rotation_query := query(world, Position, Rotation) //register and sort using group
+    postion_scale_query := ecs.query(world, Velocity, Scale,4) //register and sort using group
+    position_rotation_query := ecs.query(world, Position, Rotation,4) //register and sort using group
 
-    position_rotation_query1 := query(world, Position, Rotation) //doesn't register or sort using group uses the cache result
-    postion_scale_query1 := query(world, Velocity, Scale) //doesn't register or sort using group uses the cache result
+    position_rotation_query1 := query(world, Position, Rotation,4) //doesn't register or sort using group uses the cache result
+    postion_scale_query1 := ecs.query(world, Velocity, Scale,4) //doesn't register or sort using group uses the cache result
     
    
-     for component_storage, index in run(&position_rotation_query){
+     for component_storage, index in ecs.run(&position_rotation_query){
         mut_component_storage := component_storage
 
         if component_storage.entities[index] == 2{
