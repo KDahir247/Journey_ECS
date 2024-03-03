@@ -97,7 +97,7 @@ main :: proc(){
     postion_scale_query := ecs.query(world, Velocity, Scale,4) //register and sort using group
     position_rotation_query := ecs.query(world, Position, Rotation,4) //register and sort using group
 
-    position_rotation_query1 := query(world, Position, Rotation,4) //doesn't register or sort using group uses the cache result
+    position_rotation_query1 := ecs.query(world, Position, Rotation,4) //doesn't register or sort using group uses the cache result
     postion_scale_query1 := ecs.query(world, Velocity, Scale,4) //doesn't register or sort using group uses the cache result
     
    
