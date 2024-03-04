@@ -73,8 +73,8 @@ where intrinsics.type_is_struct(component_type){
     return internal_sparse_get(&world.component_stores.component_sparse[sparse_index], entity, component_type) 
 }
 
-has_soa_component :: proc(world : $W/^$World, entity : uint, $component_type : typeid) -> bool
-where intrinsics.type_is_struct(component_type){
+has_soa_component :: proc(world : $W/^$World, entity : uint, component_type : typeid) -> bool
+{
     sparse_index := world.component_stores.component_info[component_type].sparse_index 
     return internal_sparse_has(&world.component_stores.component_sparse[sparse_index], entity) >= 0
 
@@ -1145,4 +1145,3 @@ query :: proc{query_1, query_2, query_3, query_4}
 run :: proc{run_1, run_2, run_3, run_4}
 
 //////////////////////////////////////////////////////////
-
