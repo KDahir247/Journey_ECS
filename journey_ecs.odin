@@ -4,6 +4,7 @@ import "core:slice"
 import "core:runtime"
 import "core:intrinsics"
 import "core:mem"
+import "core:simd/x86"
 import "core:fmt"
 ////////////////////////////// ECS Constant /////////////////////////////
 
@@ -219,12 +220,8 @@ deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
     delete(entity_store.removed_indicies)
 }
 
-@(private)
+@(private, enable_target_feature="lzcnt,popcnt")
 internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
-    //TODO:khal remove this branch. we will allocate a larger amount into the entities dynamic array rather than just one element (which can store only 64 new entities) we will maybe allocate 8 or more into the dynamic array
-    // and we can increment the current index by doing a bit shift right on the entity_store.entities[entity_store.current_index] which will return 1 if the value of entity_store.entities[entity_store.current_index] is -1 otherwise 0
-    // then we can compare the current index with the entites array and if the current index is larger than we allocate more into the dynamic array following the above statement. This will reduce the branch from being taken and reduce resizing.
-    
     current_entity_bits := entity_store.entities[entity_store.current_index]
 
     full_entity_bits_mask := intrinsics.count_ones(current_entity_bits) >> 6
@@ -237,10 +234,10 @@ internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
 
     if len(entity_store.removed_indicies) > 0{
         removed_entity_index := entity_store.removed_indicies[0]
-        entity_bits := entity_store.entities[removed_entity_index]
+        recycled_entity_bits := entity_store.entities[removed_entity_index]
 
-        trailing_entity_bit := intrinsics.count_trailing_zeros(entity_bits) - 1
-        invert_trailing_entity_bit := intrinsics.count_trailing_zeros(~entity_bits)
+        trailing_entity_bit := intrinsics.count_trailing_zeros(recycled_entity_bits) - 1
+        invert_trailing_entity_bit := intrinsics.count_trailing_zeros(~recycled_entity_bits)
 
         recycled_entity_id := uint(trailing_entity_bit >= 0 ? trailing_entity_bit : invert_trailing_entity_bit)
         recycled_entity_bit := 1 << recycled_entity_id
@@ -255,9 +252,8 @@ internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
         return recycled_entity_id + recycled_entity_offset
     }
 
-    entity_bits := entity_store.entities[entity_store.current_index]
 
-    entity_id :  = ENTITY_BIT_SIZE - uint(intrinsics.count_leading_zeros(entity_bits))
+    entity_id :  = ENTITY_BIT_SIZE - uint(intrinsics.count_leading_zeros(current_entity_bits))
     target_entity_bit := 1 << entity_id
 
     entity_store.entities[entity_store.current_index] |= target_entity_bit
@@ -279,8 +275,8 @@ internal_remove_entity :: proc(entity_store : $E/^$EntityStore, entity : uint){
     }
 }
 
-@(private)
-interanl_fetch_alive_entites :: proc(entity_store : $E/^$EntityStore, allocator : mem.Allocator) -> []uint{
+@(private, enable_target_feature="lzcnt,popcnt")
+interanl_fetch_alive_entites :: proc(entity_store : $E/^$EntityStore, allocator : mem.Allocator) -> []uint #no_bounds_check{
     entities := slice.as_ptr(entity_store.entities[:])
 
     alive_count_0 := 0
@@ -312,7 +308,7 @@ interanl_fetch_alive_entites :: proc(entity_store : $E/^$EntityStore, allocator 
     
     for current_bit != 0 {
         target_entity_bit := (current_bit & -current_bit)
-        target_bit := intrinsics.count_trailing_zeros(target_entity_bit)
+        target_bit := 63 - intrinsics.count_leading_zeros(target_entity_bit)
         current_bit ~= target_entity_bit
         entity_slice[entity_index] = uint(target_bit)
         entity_index += 1
@@ -324,13 +320,12 @@ interanl_fetch_alive_entites :: proc(entity_store : $E/^$EntityStore, allocator 
         current_bit := entities[index]
         for current_bit != 0 {
             target_entity_bit := (current_bit & -current_bit)
-            target_bit := intrinsics.count_trailing_zeros(target_entity_bit)
+            target_bit := 63 - intrinsics.count_leading_zeros(target_entity_bit)
             current_bit ~=target_entity_bit
             entity_slice[entity_index] = uint(target_bit) + uint(entity_offset)
             entity_index += 1
         }
     }
-
 
     return entity_slice
 }
@@ -1151,27 +1146,3 @@ run :: proc{run_1, run_2, run_3, run_4}
 
 //////////////////////////////////////////////////////////
 
-main :: proc(){
-
-    world := init_world()
-    defer deinit_world(world)
-
-
-    for a in 0..<64{
-       create_entity(world)
-    }
-
-    for i in 0..<64{
-        if i % 2 == 0{
-            remove_entity(world,uint(i))
-        }
-    }
-
-
-    entites := get_alive_entites(world)
-
-    fmt.println(entites)
-
-
-
-}
