@@ -202,9 +202,6 @@ EntityStore :: struct {
 
 @(private)
 init_entity_store :: proc() -> EntityStore{
-
-    //DEFAULT_STORE_CAPACITY * 64 can be added before resizing entities 
-    //removed_indices will be reserve a small size of the dynamic array, since DEFAULT_STORE_CAPACITY(32) * 64 is large and uncommon to delete 2048 entities
     entity_store := EntityStore{
         entities = make([dynamic]int, 4,DEFAULT_STORE_CAPACITY),
         removed_indicies = make([dynamic]uint, 0, DEFAULT_STORE_CAPACITY >> 4),
@@ -222,16 +219,6 @@ deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
 
 @(private, enable_target_feature="lzcnt,popcnt")
 internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
-    current_entity_bits := entity_store.entities[entity_store.current_index]
-
-    full_entity_bits_mask := intrinsics.count_ones(current_entity_bits) >> 6
-    entity_store.current_index += uint(full_entity_bits_mask)
-    
-    if entity_store.current_index >= len(entity_store.entities){
-        previous_len := len(entity_store.entities)
-        resize_dynamic_array(&entity_store.entities,previous_len + 4)
-    }
-
     if len(entity_store.removed_indicies) > 0{
         removed_entity_index := entity_store.removed_indicies[0]
         recycled_entity_bits := entity_store.entities[removed_entity_index]
@@ -252,13 +239,28 @@ internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
         return recycled_entity_id + recycled_entity_offset
     }
 
+    if entity_store.current_index + 1 >= len(entity_store.entities){
+        previous_len := len(entity_store.entities)
+        resize_dynamic_array(&entity_store.entities,previous_len + 4)
+    }
 
-    entity_id :  = ENTITY_BIT_SIZE - uint(intrinsics.count_leading_zeros(current_entity_bits))
+    //TODO:khal free the chains
+
+    current_entity_bits := entity_store.entities[entity_store.current_index]
+    entity_bits := intrinsics.count_ones(current_entity_bits)
+    full_entity_bits_mask := entity_bits >> 6
+    target_entity_index := entity_store.current_index + uint(full_entity_bits_mask)
+
+
+    target_entity_bits := entity_store.entities[target_entity_index]
+    lz_entity_bits := intrinsics.count_leading_zeros(target_entity_bits) 
+    entity_id := ENTITY_BIT_SIZE - uint(lz_entity_bits)
     target_entity_bit := 1 << entity_id
+    target_entity_offset := target_entity_index << PAGE_BIT
 
-    entity_store.entities[entity_store.current_index] |= target_entity_bit
+    entity_store.entities[target_entity_index] |= target_entity_bit
+    entity_store.current_index = target_entity_index
 
-    target_entity_offset := entity_store.current_index << PAGE_BIT
     return entity_id + target_entity_offset
 }
 
@@ -304,25 +306,15 @@ interanl_fetch_alive_entites :: proc(entity_store : $E/^$EntityStore, allocator 
 
     entity_index := 0
 
-    current_bit := entities[0]
-    
-    for current_bit != 0 {
-        target_entity_bit := (current_bit & -current_bit)
-        target_bit := 63 - intrinsics.count_leading_zeros(target_entity_bit)
-        current_bit ~= target_entity_bit
-        entity_slice[entity_index] = uint(target_bit)
-        entity_index += 1
-    }
+    for i :uint= 0; i <= entity_store.current_index; i += 1{
+        entity_offset := i << PAGE_BIT
 
-    for index in 0..<entity_store.current_index{
-        entity_offset := 64 << index
-
-        current_bit := entities[index]
+        current_bit := entities[i]
         for current_bit != 0 {
             target_entity_bit := (current_bit & -current_bit)
             target_bit := 63 - intrinsics.count_leading_zeros(target_entity_bit)
             current_bit ~=target_entity_bit
-            entity_slice[entity_index] = uint(target_bit) + uint(entity_offset)
+            entity_slice[entity_index] = uint(target_bit) + entity_offset
             entity_index += 1
         }
     }
@@ -1145,3 +1137,48 @@ query :: proc{query_1, query_2, query_3, query_4}
 run :: proc{run_1, run_2, run_3, run_4}
 
 //////////////////////////////////////////////////////////
+
+main :: proc(){
+
+    world := init_world()
+    defer deinit_world(world)
+
+
+    for a in 0..<200{
+      create_entity(world)
+    }
+    
+
+
+    for i in 0..<200{
+        if i % 2 == 0{
+            remove_entity(world,uint(i))
+        }
+    }
+
+
+    entites := get_alive_entites(world)
+    fmt.println(entites)
+
+    // create_entity(world)
+    // create_entity(world)
+
+    a :: struct{
+        i : int,
+    }
+    register(world, a)
+
+
+    add_soa_component(world, 0, a{i = 20})
+
+    b := [1]typeid{a}
+    for i in b{
+        if has_soa_component(world, 0, i){
+            fmt.println("hi")
+        }
+    }
+   
+
+
+
+}
