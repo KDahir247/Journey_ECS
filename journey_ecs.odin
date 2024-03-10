@@ -4,8 +4,6 @@ import "core:slice"
 import "core:runtime"
 import "core:intrinsics"
 import "core:mem"
-import "core:simd/x86"
-import "core:fmt"
 ////////////////////////////// ECS Constant /////////////////////////////
 
 DEFAULT_STORE_CAPACITY :: 32
@@ -20,7 +18,7 @@ PAGE_INDEX :uint: PAGE_SIZE - 1
 ////////////////////////////// ECS Utility /////////////////////////////
 
 //return 0 for all negative and 1 for all postive and zero.
-@(private)
+@(private, optimization_mode="speed")
 normalize_value :: #force_inline proc "contextless" (val : int) -> int{
     return (val >> 63) + 1 //arithemtic shift
 }
@@ -126,7 +124,7 @@ remove_entity :: proc(world : $W/^$World, entity : uint){
         }
     }
 
-    internal_remove_entity(&world.entities_stores,entity)
+    internal_recylce_entity(&world.entities_stores,entity)
 }
 
 get_alive_entites :: proc(world : $W/^$World, allocator := context.temp_allocator) -> []uint{
@@ -196,15 +194,18 @@ get_soa_component_cap :: proc(world : $W/^$World, $component_type : typeid) -> i
 //////////////////////// Entity Store /////////////////////////////
 EntityStore :: struct { 
      entities : [dynamic]int,
-     removed_indicies : [dynamic]uint,
-     current_index : uint,
+     removed_indicies : []uint,
+     current_index : int,
 }
 
 @(private)
 init_entity_store :: proc() -> EntityStore{
+    recycled_entity_container := make([]uint,DEFAULT_STORE_CAPACITY)
+    (transmute(^runtime.Raw_Slice)&recycled_entity_container).len = 0
+
     entity_store := EntityStore{
         entities = make([dynamic]int, 4,DEFAULT_STORE_CAPACITY),
-        removed_indicies = make([dynamic]uint, 0, DEFAULT_STORE_CAPACITY >> 4),
+        removed_indicies = recycled_entity_container,
         current_index = 0,
     }
     
@@ -218,117 +219,131 @@ deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
 }
 
 @(private, enable_target_feature="lzcnt,popcnt")
-internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint{
-    if len(entity_store.removed_indicies) > 0{
-        removed_entity_index := entity_store.removed_indicies[0]
-        recycled_entity_bits := entity_store.entities[removed_entity_index]
+internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint #no_bounds_check{
+    if len(entity_store.removed_indicies) <= 0{
+        
+        entity_store.current_index -= (entity_store.entities[entity_store.current_index] >> 63) 
+        
+        full_entities_mask := normalize_value(entity_store.current_index - len(entity_store.entities))
+        lz_entity_count := intrinsics.count_leading_zeros(entity_store.entities[entity_store.current_index])
 
-        trailing_entity_bit := intrinsics.count_trailing_zeros(recycled_entity_bits) - 1
-        invert_trailing_entity_bit := intrinsics.count_trailing_zeros(~recycled_entity_bits)
+        target_entity_offset := entity_store.current_index << PAGE_BIT
+        next_entity_resize_count := full_entities_mask << 2
 
-        recycled_entity_id := uint(trailing_entity_bit >= 0 ? trailing_entity_bit : invert_trailing_entity_bit)
-        recycled_entity_bit := 1 << recycled_entity_id
+        target_entity_len := next_entity_resize_count + len(entity_store.entities)
+        entity_id := ENTITY_BIT_SIZE - uint(lz_entity_count)
 
-        entity_store.entities[removed_entity_index] |= recycled_entity_bit
-
-        if entity_store.entities[removed_entity_index] == -1{
-            unordered_remove(&entity_store.removed_indicies, 0)
-        }
-
-        recycled_entity_offset := removed_entity_index << PAGE_BIT
-        return recycled_entity_id + recycled_entity_offset
+        resize_dynamic_array(&entity_store.entities, target_entity_len)
+    
+        entity_store.entities[entity_store.current_index] |= 1 << entity_id
+    
+        return entity_id + uint(target_entity_offset)
     }
 
-    if entity_store.current_index + 1 >= len(entity_store.entities){
-        previous_len := len(entity_store.entities)
-        resize_dynamic_array(&entity_store.entities,previous_len + 4)
-    }
-
-    //TODO:khal free the chains
-
-    current_entity_bits := entity_store.entities[entity_store.current_index]
-    entity_bits := intrinsics.count_ones(current_entity_bits)
-    full_entity_bits_mask := entity_bits >> 6
-    target_entity_index := entity_store.current_index + uint(full_entity_bits_mask)
-
-
-    target_entity_bits := entity_store.entities[target_entity_index]
-    lz_entity_bits := intrinsics.count_leading_zeros(target_entity_bits) 
-    entity_id := ENTITY_BIT_SIZE - uint(lz_entity_bits)
-    target_entity_bit := 1 << entity_id
-    target_entity_offset := target_entity_index << PAGE_BIT
-
-    entity_store.entities[target_entity_index] |= target_entity_bit
-    entity_store.current_index = target_entity_index
-
-    return entity_id + target_entity_offset
+    unimplemented("Using Recylced entity is not implemented yet.")
 }
 
 @(private)
-internal_remove_entity :: proc(entity_store : $E/^$EntityStore, entity : uint){
+internal_recylce_entity :: proc(entity_store : $E/^$EntityStore, entity : uint) #no_bounds_check{
     page := internal_fetch_page(entity)
     page_index := internal_fetch_page_index(entity)
-    entity_store.entities[page] &= ~(1 << page_index)
+    already_recycled_page := false
 
-    //Linear search. It shouldn't be to bad for small amount of entity 4096 lower, but higher will need more iteration
-    //Iteration amount is (EntityID + 1) / 64, but this is ok since deleting entity should be called sparingly in a ecs solution
-    if !slice.contains(entity_store.removed_indicies[:], page){
-        append(&entity_store.removed_indicies, page)
+    if len(entity_store.removed_indicies) >= DEFAULT_STORE_CAPACITY{
+        (transmute(^runtime.Raw_Slice)&entity_store.removed_indicies).len = 0
     }
+
+    //Linear search. It shouldn't be to bad, since the removed_indicies is capped at 32 and once reach it will permanently remove all recycled entities 
+    for x in entity_store.removed_indicies{
+        if x == page{
+            already_recycled_page = true
+            break
+        }
+    }
+   
+    if !already_recycled_page{
+        current_len := len(entity_store.removed_indicies)
+        (transmute(^runtime.Raw_Slice)&entity_store.removed_indicies).len += 1
+        entity_store.removed_indicies[current_len] = page
+    }
+
+    entity_store.entities[page] &= ~(1 << page_index)
 }
 
-@(private, enable_target_feature="lzcnt,popcnt")
+@(private, optimization_mode = "size", enable_target_feature="lzcnt,popcnt")
 interanl_fetch_alive_entites :: proc(entity_store : $E/^$EntityStore, allocator : mem.Allocator) -> []uint #no_bounds_check{
-    entities := slice.as_ptr(entity_store.entities[:])
 
     alive_count_0 := 0
     alive_count_1 := 0
     alive_count_2 := 0
     alive_count_3 := 0
 
-    for i := 0; i < len(entity_store.entities); i += 4 {
-        #no_bounds_check{
-            one_bits_0 := intrinsics.count_ones(entities[i])
-            one_bits_1 := intrinsics.count_ones(entities[i + 1])
-            one_bits_2 := intrinsics.count_ones(entities[i + 2])
-            one_bits_3 := intrinsics.count_ones(entities[i + 3])
-            
-            alive_count_0 += one_bits_0
-            alive_count_1 += one_bits_1
-            alive_count_2 += one_bits_2
-            alive_count_3 += one_bits_3
-        }
+    load_entity_index := 0;
+    for load_entity_index < len(entity_store.entities) {
+        alive_count_0 += intrinsics.count_ones(entity_store.entities[load_entity_index])
+        alive_count_1 += intrinsics.count_ones(entity_store.entities[load_entity_index + 1])
+        alive_count_2 += intrinsics.count_ones(entity_store.entities[load_entity_index + 2])
+        alive_count_3 += intrinsics.count_ones(entity_store.entities[load_entity_index + 3])
+        load_entity_index += 4;
     }
 
-    total_alive_entites := (alive_count_0 + alive_count_1) + (alive_count_2 + alive_count_3)
+    total_alive_entites := (alive_count_0 + alive_count_1) + (alive_count_2 + alive_count_3) + 1
 
     entity_slice := make_slice([]uint, total_alive_entites, allocator)
 
-    entity_index := 0
+    store_entity_index := 1
 
-    for i :uint= 0; i <= entity_store.current_index; i += 1{
-        entity_offset := i << PAGE_BIT
+    for i := 0; i < load_entity_index; i += 4{
+        entity_offset_0 := i << PAGE_BIT
+        entity_offset_1 := (i + 1) << PAGE_BIT
+        entity_offset_2 := (i + 2) << PAGE_BIT
+        entity_offset_3 := (i + 3) << PAGE_BIT
 
-        current_bit := entities[i]
-        for current_bit != 0 {
-            target_entity_bit := (current_bit & -current_bit)
-            target_bit := 63 - intrinsics.count_leading_zeros(target_entity_bit)
-            current_bit ~=target_entity_bit
-            entity_slice[entity_index] = uint(target_bit) + entity_offset
-            entity_index += 1
+        current_bit_0 := entity_store.entities[i]
+        current_bit_1 := entity_store.entities[i + 1]
+        current_bit_2 := entity_store.entities[i + 2]
+        current_bit_3 := entity_store.entities[i + 3]
+
+        for bit_count in 0..<64{
+            target_entity_bit_0 := (current_bit_0 & -current_bit_0)
+            target_entity_bit_1 := (current_bit_1 & -current_bit_1)
+            target_entity_bit_2 := (current_bit_2 & -current_bit_2)
+            target_entity_bit_3 := (current_bit_3 & -current_bit_3)
+
+            target_bit_0 :=int(PAGE_INDEX) - intrinsics.count_leading_zeros(target_entity_bit_0)
+            target_bit_1 :=int(PAGE_INDEX) - intrinsics.count_leading_zeros(target_entity_bit_1)
+            target_bit_2 :=int(PAGE_INDEX) - intrinsics.count_leading_zeros(target_entity_bit_2)
+            target_bit_3 :=int(PAGE_INDEX) - intrinsics.count_leading_zeros(target_entity_bit_3)
+
+            index_mask_0 := target_bit_0 >> PAGE_INDEX
+            index_mask_1 := target_bit_1 >> PAGE_INDEX
+            index_mask_2 := target_bit_2 >> PAGE_INDEX
+            index_mask_3 := target_bit_3 >> PAGE_INDEX
+            
+            current_bit_0 &= ~target_entity_bit_0
+            current_bit_1 &= ~target_entity_bit_1
+            current_bit_2 &= ~target_entity_bit_2
+            current_bit_3 &= ~target_entity_bit_3
+
+            entity_slice[store_entity_index] = uint(target_bit_0 + entity_offset_0)
+            entity_slice[(store_entity_index + 1)] = uint(target_bit_1 + entity_offset_1)
+            entity_slice[(store_entity_index + 2)] = uint(target_bit_2 + entity_offset_2)
+            entity_slice[(store_entity_index + 3) ] = uint(target_bit_3 + entity_offset_3)
+
+            store_entity_index += (index_mask_0 + 1) + (index_mask_1 + 1) + (index_mask_2 + 1) + (index_mask_3 + 1)
         }
     }
 
-    return entity_slice
+    return entity_slice[1:]
 }
 
 @(private)
-internal_fetch_page_index :: #force_inline proc(entity : uint) -> uint{
+internal_fetch_page_index :: #force_inline proc "contextless" (entity : uint) -> uint{
     return entity & PAGE_INDEX
 }
 
 @(private)
-internal_fetch_page :: #force_inline proc(entity : uint) -> uint{
+internal_fetch_page  ::  #force_inline proc "contextless" (entity : uint)  -> uint{
     return entity >> PAGE_BIT
 }
 

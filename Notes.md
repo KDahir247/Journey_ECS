@@ -1,5 +1,0 @@
-# Personal Notes for ECS
-
---- 
-
-
