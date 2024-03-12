@@ -193,9 +193,9 @@ get_soa_component_cap :: proc(world : $W/^$World, $component_type : typeid) -> i
 
 //////////////////////// Entity Store /////////////////////////////
 EntityStore :: struct { 
-     entities : [dynamic]int,
-     removed_indicies : []uint,
-     current_index : int,
+    entities : [dynamic]int,
+    removed_indicies : []uint,
+    entity_index : uint,
 }
 
 @(private)
@@ -206,7 +206,6 @@ init_entity_store :: proc() -> EntityStore{
     entity_store := EntityStore{
         entities = make([dynamic]int, 4,DEFAULT_STORE_CAPACITY),
         removed_indicies = recycled_entity_container,
-        current_index = 0,
     }
     
     return entity_store
@@ -218,26 +217,23 @@ deinit_entity_store :: proc(entity_store : $E/^$EntityStore){
     delete(entity_store.removed_indicies)
 }
 
-@(private, enable_target_feature="lzcnt,popcnt")
+@(private)
 internal_create_entity :: proc(entity_store : $E/^$EntityStore) -> uint #no_bounds_check{
     if len(entity_store.removed_indicies) <= 0{
+
+        target_entity_id := entity_store.entity_index
         
-        entity_store.current_index -= (entity_store.entities[entity_store.current_index] >> 63) 
+        wrap_aroung_entity_id := entity_store.entity_index & PAGE_INDEX
+        current_index := entity_store.entity_index >> 6
         
-        full_entities_mask := normalize_value(entity_store.current_index - len(entity_store.entities))
-        lz_entity_count := intrinsics.count_leading_zeros(entity_store.entities[entity_store.current_index])
+        remainder_bit := PAGE_SIZE - wrap_aroung_entity_id
 
-        target_entity_offset := entity_store.current_index << PAGE_BIT
-        next_entity_resize_count := full_entities_mask << 2
+        resize_dynamic_array(&entity_store.entities, int(remainder_bit + entity_store.entity_index) >> 6)
 
-        target_entity_len := next_entity_resize_count + len(entity_store.entities)
-        entity_id := ENTITY_BIT_SIZE - uint(lz_entity_count)
+        entity_store.entities[current_index] |= 1 << wrap_aroung_entity_id
+        entity_store.entity_index += 1 
 
-        resize_dynamic_array(&entity_store.entities, target_entity_len)
-    
-        entity_store.entities[entity_store.current_index] |= 1 << entity_id
-    
-        return entity_id + uint(target_entity_offset)
+        return target_entity_id
     }
 
     unimplemented("Using Recylced entity is not implemented yet.")
@@ -544,7 +540,7 @@ internal_sparse_put_index :: #force_inline proc(sparse_array : $SA/^$SparseArray
 }
 
 @(private)
-internal_sparse_swap_index ::  proc(sparse_array : $SA/^$SparseArray, dst_entity : uint, src_entity : uint){
+internal_sparse_swap_index ::  proc(sparse_array : $SA/^$SparseArray, dst_entity : uint, src_entity : uint) #no_bounds_check{
     dst_page_id := internal_fetch_page_index(dst_entity)
     src_page_id := internal_fetch_page_index(src_entity)
 
