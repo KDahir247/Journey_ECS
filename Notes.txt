@@ -1,0 +1,44 @@
+We will allow creating multiple of the same component
+eg. 
+
+register(world, Position)
+register(world, Position)
+register(world, Position)
+
+but why?
+
+We can have different interpretation of the data
+for example even though all these are Position components.
+The user can be organized it where the first Position is the player position,
+the second can be the enemy position, and lastly the tile position
+
+rather then querying all the position
+[player_pos, enemy_pos.............., tile_pos.......................]
+Note that the order can be different. This will be ineffective on querying on multiple component
+if it has alot of entities. Most commonly Position, Scale, Rotation, Animation, etc...
+
+We can break it to sub section. Like so...
+
+[player_pos]
+[enemy_pos.........]
+[tile_pos..........]
+
+
+Even though they are all position the user has finer control. If the user want to 
+have one position that will have all the entity position then they can do it. If they want
+two position to seperate the player and others then they can do that and it goes on.
+This applies to any component that is registered.
+
+Single register will be like
+
+[..................................................]
+
+
+while multiple register of the same component will be like
+
+[..................]
+
+[..................]
+
+[..................]
+
