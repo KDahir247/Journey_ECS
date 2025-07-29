@@ -1,5 +1,9 @@
 package journey
 
+import "core:sys/linux"
+import "core:fmt"
+
+
 /*
    What is the problem (informal):
    We want to figure out a way to organize entity's components in a way where it is possible to always read/write from a full cache line and use all of it.
@@ -16,6 +20,7 @@ package journey
    Remove: Word, Entities, Data_Type_Identifiers
    Query: Word, Data_Types
 
+
    Entity
    Add: World, Int
    Remove: World, Int_Collection
@@ -30,6 +35,13 @@ package journey
    Entity
    Add: Int_Collection
    Remove: Nothing
+
+
+   Design:
+   
+   Queries will be by specific indices that are returned when calling register_components, If we query by typeid it will not distingush the different interpreted Position data types.
+   (using position as an example) It will fetch all the Position data, which is not what we want. The interperation of the data is up to the user. They may specify a Position != Position
+   if the user interprets the data differently (example Player Position, Decal Position) or a data can indeed be Position == Position.
 
    --------------------------------------------------------------------------------------------
    Limitation:
@@ -92,7 +104,66 @@ package journey
 
    We need to organize the data in a way to allow the end user to use both SIMD and single types on the data when implementing the transform.
 
-   Solution:
-
-
  */
+
+ BYTE :: distinct u8
+ WORD :: distinct u16
+ DWORD :: distinct u32
+ QWORD :: distinct u64
+
+ PAGE_SIZE :: 4096
+ PAGE_BIT_SIZE :: PAGE_SIZE * 8
+
+ 
+ World :: struct{
+	 entities : [^]BYTE,
+	 data_sparse : [^]DataSparse,
+ }
+
+ DataSparse :: struct{
+	 //Others.
+	 component_blob : rawptr,
+	 entity_blob : rawptr,
+ }
+
+
+ //Do I get a valid value back everytime?
+ //What type of value do I get back?
+ //Can I use the value without any check?
+ //Can I run the function repeatly and procduce the same effect  
+ init_world :: proc(world : ^World, $entity_capacity : DWORD, $unique_component_capacity : DWORD){
+
+	 //Entity Init
+	 //TODO:Khal Do we need to reserve the first element for some header or meta data?
+	 {		 
+		 entity_page_count_required : DWORD = ---
+
+		 entity_page_count_required = (entity_capacity + 32767) / PAGE_BIT_SIZE
+		 ptr, _ := linux.mmap(0x00, uint(entity_page_count_required * PAGE_SIZE), {.READ, .WRITE}, {.ANONYMOUS}, linux.Fd(-1), 0)
+		 world.entities = cast([^]BYTE)ptr
+	 }
+
+	 //Data Store Init
+	 {
+
+
+
+	 }
+ }
+
+
+
+
+
+
+
+
+
+ //Used for testing.
+ main :: proc(){
+
+	 world : World
+
+	 init_world(&world, 4095, 200)
+
+ }
