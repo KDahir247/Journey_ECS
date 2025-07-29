@@ -61,6 +61,8 @@ import "core:fmt"
    The data can only be struct
 
    Header data and meta data maybe stored in memory to avoid using generic in this library.
+
+   No notion of events (hooks, observer, observable, etc...) buitin the library (don't see this as a weakness)
    --------------------------------------------------------------------------------------------
    Constraint:
    
@@ -75,6 +77,9 @@ import "core:fmt"
    There will not be any dependency on the data. The user can create depenency of the data if they want in the transform (if statement).
 
    majority of the procedure of this library will be done in bulk
+
+   The library will not a builtin component events (such as on value change, on component added, on component removed, etc....). This will force
+   the user to pay higher memory usage and performance even though they may not use it. The end user can implement it over the library if needed.
    --------------------------------------------------------------------------------------------
    Assumption:
 
