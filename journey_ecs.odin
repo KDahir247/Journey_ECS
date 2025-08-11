@@ -1,5 +1,6 @@
 package journey
 
+import "base:intrinsics"
 import "core:sys/linux"
 import "core:fmt"
 
@@ -119,56 +120,176 @@ import "core:fmt"
  PAGE_SIZE :: 4096
  PAGE_BIT_SIZE :: PAGE_SIZE * 8
 
- 
+ TILE_SIZE :: 8
+
+ //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
+ //For destroying the world we will use a null Dealloc (let the OS reclaim the pages after the application ends). Thus we will not store data
+ //for deallocation
  World :: struct{
-	 entities : [^]BYTE,
-	 data_sparse : [^]DataSparse,
+	 data_storage : [^]DataStorage,
+	 indices : [^]QWORD, 
  }
 
- DataSparse :: struct{
-	 //Others.
-	 component_blob : rawptr,
-	 entity_blob : rawptr,
+ //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
+ DataStorageIMM :: struct{
+	 blob : rawptr, //[[data,....................], [entity,.....................]]
+	 bytes_offset : QWORD, // the end of the [data] and the start of the [entity] in bytes
+ }
+
+ //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
+ DataStorageMUT :: struct{
+	 //TODO: We need something more primitive here. Remeber we are discarding meaning from data and just treating it as data.
+	 current_byte_offset : QWORD,
+	 grouping : [2]DWORD,
+ }
+
+ //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
+ DataStorage :: struct {
+	 imm : DataStorageIMM,
+	 mut : DataStorageMUT,
+ }
+ 
+ @(optimization_mode="favor_size") 
+ create_world :: #force_inline proc ($indices_capacity : QWORD, $unique_data_capacity : QWORD) -> World
+	where indices_capacity > 0 && unique_data_capacity > 0{
+		world : World = ---
+
+		TARGET_UNIQUE_DATA_CAPACITY :: unique_data_capacity  * size_of(DataStorage)
+		TARGET_INDICES_CAPACITY :: (indices_capacity + 0x08) 
+
+		{
+			world.data_storage = transmute([^]DataStorage)intrinsics.syscall(
+				linux.SYS_mmap,
+				0x00,
+				uintptr((TARGET_UNIQUE_DATA_CAPACITY + 0xFFF) & 0xFFFFFFFFFFFFF000),
+				uintptr(0x03),
+				uintptr(0x21),
+				~uintptr(0),
+				uintptr(0))
+
+			//idea: first byte will be used for recycled entities each bit that is 1 will represent which index an entity has been removed the entity bit can be determined by using BMI possibly.
+			 world.indices = transmute([^]QWORD)intrinsics.syscall(
+				 linux.SYS_mmap,
+				 0x00,
+				 uintptr((TARGET_INDICES_CAPACITY + 0x7FFF) / PAGE_BIT_SIZE * PAGE_SIZE),
+				 uintptr(0x03),
+				 uintptr(0x21),
+				 ~uintptr(0),
+				 uintptr(0))
+
+			 world.indices[0x00] = 0x40
+		 
+		}
+
+		//TODO:We may give advise how the allocation is used or something else. We don't really know the access pattern yet.
+		return world
+	 	  
  }
 
 
- //Do I get a valid value back everytime?
- //What type of value do I get back?
- //Can I use the value without any check?
- //Can I run the function repeatly and procduce the same effect  
- init_world :: proc(world : ^World, $entity_capacity : DWORD, $unique_component_capacity : DWORD){
+ @(optimization_mode="favor_size") 
+ register_data_storage :: proc(world : ^World, $data_typeid : typeid, $data_storage_index : QWORD, $indices_capacity : QWORD)
+	where intrinsics.type_is_struct(data_typeid) #no_bounds_check{
 
-	 //Entity Init
-	 //TODO:Khal Do we need to reserve the first element for some header or meta data?
-	 {		 
-		 entity_page_count_required : DWORD = ---
+		//Should we reserve the first index in the data storage?  What will we keep in it?
+		INDICES_SIZE :: indices_capacity * size_of(QWORD)
+		DATA_SIZE :: (indices_capacity * size_of(#soa[TILE_SIZE]data_typeid)) / TILE_SIZE
 
-		 entity_page_count_required = (entity_capacity + 32767) / PAGE_BIT_SIZE
-		 ptr, _ := linux.mmap(0x00, uint(entity_page_count_required * PAGE_SIZE), {.READ, .WRITE}, {.ANONYMOUS}, linux.Fd(-1), 0)
-		 world.entities = cast([^]BYTE)ptr
-	 }
+		TOTAL_SIZE :: (INDICES_SIZE + DATA_SIZE + 0xFFF) & 0xFFFFFFFFFFFFF000
 
-	 //Data Store Init
-	 {
+		{
+			world.data_storage[data_storage_index].imm = {
+				transmute(rawptr)intrinsics.syscall(
+					linux.SYS_mmap,
+					uintptr(0x00),
+					uintptr(TOTAL_SIZE),
+					uintptr(0x03),
+					uintptr(0x21),
+					~uintptr(0),
+					uintptr(0)),
+				DATA_SIZE,
+			}
 
+		}
 
-
-	 }
+		//TODO:We may give advise how the allocation is used or something else. We don't really know the access pattern yet.
  }
 
 
 
+//- When create a procedure and calling a procedure think of these following question;
+//1) Do i get a valid value back everytime?
+//2) What type of value do I get back?
+//3) Can i use the value without checking?
+//4) Can i run the fuction repeatedly and produce the same effect without allocating memory per call?
+ //TODO:Khal Disassemble Me and optimize me!
+@(optimization_mode="favor_size",enable_target_feature = "bmi,bmi2")
+create_indices :: proc(world : ^World, $indices_count : QWORD){
+
+	/*
+	   Reminders
+
+	   Write code that operate in batches (When there is one there is many)
+	   Reserve the zero index for header or info
+	   Reduce code path because every new path can represents a new possibility of code failure
+
+	   write for readability
+	   don't make the code pessimistic
+	   design around data layout and data flow first
+	   be explicit rather than implicit. This also applies to the user
+	   Primitive type and Explicit size
+	   error are just data
+	   where does read and write occur what is mutated?
+	   When reading use 64 bytes when possible
+	   When write use 32 bytes when possible
+	   Use scope rather than function calls
+	 */
+	full_slots :: indices_count / 0x40
+	partial_bits :: indices_count & 63
+
+	occupying_bits : QWORD = ---
+	current_slot : QWORD = ---
+	total_used_bits : QWORD = ---
+	carry_over_index : QWORD = --- 
+
+	occupying_bits = world.indices[0x00] + partial_bits
+	current_slot = world.indices[0x00] / 0x40
+
+	total_used_bits = (full_slots * 0x40) + occupying_bits
+	carry_over_index = total_used_bits / 0x40
+
+	for i in 0..<full_slots{
+		world.indices[current_slot + i] = 0xFFFFFFFFFFFFFFFF
+	}
+
+	world.indices[current_slot + full_slots] = 0xFFFFFFFFFFFFFFFF
+
+	world.indices[carry_over_index] = (1 << (total_used_bits % 64)) - 1
 
 
-
-
-
+	world.indices[0x00] = total_used_bits
+}
 
  //Used for testing.
  main :: proc(){
 
-	 world : World
+	 world : World = ---
 
-	 init_world(&world, 4095, 200)
+	 a :: struct{
+		 c : f32,
+	 }
+
+	 world = create_world(700, 500)
+	 register_data_storage(&world, a, 0, 200)
+	 create_indices(&world, 500)
+	 create_indices(&world, 200)
+	 create_indices(&world, 100)
+
+	 b := world.indices[0x00] / 0x40 
+
+	 for i in 1..=b{
+		 fmt.println("index: ",world.indices[i])
+	 }
+
 
  }
