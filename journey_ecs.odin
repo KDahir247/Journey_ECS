@@ -4,7 +4,6 @@ import "base:intrinsics"
 import "core:sys/linux"
 import "core:fmt"
 
-
 /*
    What is the problem (informal):
    We want to figure out a way to organize entity's components in a way where it is possible to always read/write from a full cache line and use all of it.
@@ -117,10 +116,35 @@ import "core:fmt"
  DWORD :: distinct u32
  QWORD :: distinct u64
 
+
+
+ BYTES_BIT_SIZE :: 8
+ WORD_BIT_SIZE :: 16
+ DWORD_BIT_SIZE :: 32
+ QWORD_BIT_SIZE :: 64
+
  PAGE_SIZE :: 4096
  PAGE_BIT_SIZE :: PAGE_SIZE * 8
 
  TILE_SIZE :: 8
+
+
+//Dont have this in my version of Odin
+@(private, default_calling_convention = "none")
+foreign _ {
+	@(link_name = "llvm.x86.bmi.bzhi.32")
+	bzhi_u32 :: proc(a, index: u32) -> u32 ---
+	@(link_name = "llvm.x86.bmi.bzhi.64")
+	bzhi_u64 :: proc(a, index: u64) -> u64 ---
+	@(link_name = "llvm.x86.bmi.pdep.32")
+	pdep_u32 :: proc(a, mask: u32) -> u32 ---
+	@(link_name = "llvm.x86.bmi.pdep.64")
+	pdep_u64 :: proc(a, mask: u64) -> u64 ---
+	@(link_name = "llvm.x86.bmi.pext.32")
+	pext_u32 :: proc(a, mask: u32) -> u32 ---
+	@(link_name = "llvm.x86.bmi.pext.64")
+	pext_u64 :: proc(a, mask: u64) -> u64 ---
+}
 
  //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
  //For destroying the world we will use a null Dealloc (let the OS reclaim the pages after the application ends). Thus we will not store data
@@ -132,7 +156,7 @@ import "core:fmt"
 
  //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
  DataStorageIMM :: struct{
-	 blob : rawptr, //[[data,....................], [entity,.....................]]
+	 blob : rawptr, //[[data,....................], [entity,.....................]] //maybe it will have a format of [LOWHI, LOWHI,.....], [data,.............] where LOWHI is the low identfier and high is the high identifier.
 	 bytes_offset : QWORD, // the end of the [data] and the start of the [entity] in bytes
  }
 
@@ -148,7 +172,7 @@ import "core:fmt"
 	 imm : DataStorageIMM,
 	 mut : DataStorageMUT,
  }
- 
+
  @(optimization_mode="favor_size") 
  create_world :: #force_inline proc ($indices_capacity : QWORD, $unique_data_capacity : QWORD) -> World
 	where indices_capacity > 0 && unique_data_capacity > 0{
@@ -216,58 +240,40 @@ import "core:fmt"
  }
 
 
+ //TODO:Khal finish return type.
+ //Recycling is not implemented. (may not be implemented)
+@(enable_target_feature = "bmi2")
+create_indices :: proc(world : ^World, $bits_to_use : QWORD) -> QWORD{
+	NUMBER_OF_QWORD_OCCUPIED :: bits_to_use / 0x40
+	ALIGNED64_BITS_TO_USE :: NUMBER_OF_QWORD_OCCUPIED * 0x40
 
-//- When create a procedure and calling a procedure think of these following question;
-//1) Do i get a valid value back everytime?
-//2) What type of value do I get back?
-//3) Can i use the value without checking?
-//4) Can i run the fuction repeatedly and produce the same effect without allocating memory per call?
- //TODO:Khal Disassemble Me and optimize me!
-@(optimization_mode="favor_size",enable_target_feature = "bmi,bmi2")
-create_indices :: proc(world : ^World, $indices_count : QWORD){
+	indices_buffer : [^]QWORD = ---
+	current_bit_used : QWORD = ---
+	remaining_bit_mask : QWORD = ---
+	
+	current_bit_used = world.indices[0x00]
 
-	/*
-	   Reminders
+	indices_buffer = world.indices[current_bit_used / QWORD_BIT_SIZE:]
+	remaining_bit_mask = QWORD(bzhi_u64(u64(0xFFFFFFFFFFFFFFFF), u64(current_bit_used + bits_to_use) % QWORD_BIT_SIZE))//(1 << (total_bit_used % QWORD_BIT_SIZE)) - 1	
 
-	   Write code that operate in batches (When there is one there is many)
-	   Reserve the zero index for header or info
-	   Reduce code path because every new path can represents a new possibility of code failure
-
-	   write for readability
-	   don't make the code pessimistic
-	   design around data layout and data flow first
-	   be explicit rather than implicit. This also applies to the user
-	   Primitive type and Explicit size
-	   error are just data
-	   where does read and write occur what is mutated?
-	   When reading use 64 bytes when possible
-	   When write use 32 bytes when possible
-	   Use scope rather than function calls
-	 */
-	full_slots :: indices_count / 0x40
-	partial_bits :: indices_count & 63
-
-	occupying_bits : QWORD = ---
-	current_slot : QWORD = ---
-	total_used_bits : QWORD = ---
-	carry_over_index : QWORD = --- 
-
-	occupying_bits = world.indices[0x00] + partial_bits
-	current_slot = world.indices[0x00] / 0x40
-
-	total_used_bits = (full_slots * 0x40) + occupying_bits
-	carry_over_index = total_used_bits / 0x40
-
-	for i in 0..<full_slots{
-		world.indices[current_slot + i] = 0xFFFFFFFFFFFFFFFF
+	for i in 0..<NUMBER_OF_QWORD_OCCUPIED{
+		indices_buffer[i] = 0xFFFFFFFFFFFFFFFF
 	}
 
-	world.indices[current_slot + full_slots] = 0xFFFFFFFFFFFFFFFF
+	indices_buffer[NUMBER_OF_QWORD_OCCUPIED] = 0xFFFFFFFFFFFFFFFF
 
-	world.indices[carry_over_index] = (1 << (total_used_bits % 64)) - 1
+	if !transmute(b64)(((current_bit_used + bits_to_use) / QWORD_BIT_SIZE) - ((current_bit_used + ALIGNED64_BITS_TO_USE) / QWORD_BIT_SIZE)){
+		indices_buffer[NUMBER_OF_QWORD_OCCUPIED] = remaining_bit_mask
+	}
 
+	indices_buffer[NUMBER_OF_QWORD_OCCUPIED + 1] = remaining_bit_mask
 
-	world.indices[0x00] = total_used_bits
+	world.indices[0x00] += bits_to_use
+
+	//Yeah 32 bit for entity id and 32 bit for bit_to_use.
+	//Supporting the full 32 bits of entity id (1 << 32) will need 67,108,865 QWORD that is 131,072.5 number of PAGES!
+	//32 bit and 32 bit to prevant any partial register stall as well.
+	return (bits_to_use * 0x100000000) | current_bit_used 
 }
 
  //Used for testing.
@@ -281,10 +287,12 @@ create_indices :: proc(world : ^World, $indices_count : QWORD){
 
 	 world = create_world(700, 500)
 	 register_data_storage(&world, a, 0, 200)
-	 create_indices(&world, 500)
-	 create_indices(&world, 200)
-	 create_indices(&world, 100)
+	 
+	 ac := create_indices(&world, 500)
+	 ab := create_indices(&world, 200)
+	 ad := create_indices(&world, 100)
 
+	 fmt.println(ac, ab, ad)
 	 b := world.indices[0x00] / 0x40 
 
 	 for i in 1..=b{
