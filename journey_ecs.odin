@@ -240,7 +240,6 @@ foreign _ {
  }
 
 
- //TODO:Khal finish return type.
  //Recycling is not implemented. (may not be implemented)
 @(enable_target_feature = "bmi2")
 create_indices :: proc(world : ^World, $bits_to_use : QWORD) -> QWORD{
@@ -270,9 +269,6 @@ create_indices :: proc(world : ^World, $bits_to_use : QWORD) -> QWORD{
 
 	world.indices[0x00] += bits_to_use
 
-	//Yeah 32 bit for entity id and 32 bit for bit_to_use.
-	//Supporting the full 32 bits of entity id (1 << 32) will need 67,108,865 QWORD that is 131,072.5 number of PAGES!
-	//32 bit and 32 bit to prevant any partial register stall as well.
 	return (bits_to_use * 0x100000000) | current_bit_used 
 }
 
