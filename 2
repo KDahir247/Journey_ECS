@@ -157,7 +157,7 @@ foreign _ {
  }
 
  //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
-DataStorage :: struct{
+ DataStorage :: struct {
      blob : rawptr,
      indices_byte_offset : QWORD,
      data_size : QWORD,
@@ -270,21 +270,31 @@ create_indices :: proc(world : ^World, $bits_to_use : QWORD) -> QWORD{
 
 //Should this take a slice of indices and work with indices?
 //We will check for exact matches of [index, length] when querying
-bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, $indices_count : QWORD, indices : [indices_count]QWORD) #no_bounds_check {
+bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : ..QWORD){
+    //fmt.println(transmute([2]u32)(indices[1]))
+
     data_storage : DataStorage = ---
 
-    intrinsics.mem_copy_non_overlapping(&data_storage,&world.data_storage[storage_index], size_of(DataStorage))
+    data_storage = world.data_storage[storage_index]
     
-    for i in 0..<indices_count{
+    for i in 0..<QWORD(len(indices)){
+        ptr_offset : uintptr = ---
         identifier_entry : [2]QWORD = ---
-        identifier_entry[0x00] = QWORD(DWORD(indices[i]))
-        identifier_entry[0x01] = QWORD(indices[i] / 0x100000000)
-        intrinsics.mem_copy(rawptr(uintptr(data_storage.blob) + uintptr(0x08 * (data_storage.current_index + i))), &identifier_entry ,size_of(QWORD))
 
+        ptr_offset = uintptr(data_storage.blob) + uintptr(0x10 * (data_storage.current_index + i))
+        identifier_entry[0x00] = QWORD(indices[i] & 0xFFFFFFFF)
+        identifier_entry[0x01] = QWORD(indices[i] / 0x100000000)
+        intrinsics.mem_copy_non_overlapping(rawptr(ptr_offset), &identifier_entry ,size_of(QWORD) * 2)
+
+
+        fmt.println((transmute([^]QWORD)ptr_offset)[0:10])
+      //  world.data_storage[storage_index]
+        
+       // world.data_storage[storage_index]
     }
 
 
-    world.data_storage[storage_index].current_index = data_storage.current_index + indices_count
+    //world.data_storage[storage_index].current_index = data_storage.current_index + QWORD(len(indices))
     
 }
 
@@ -306,7 +316,7 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, $indices_co
 	 enemies := create_indices(&world, 20)
 	 npc := create_indices(&world, 50)
 
-     bind_indices_to_data(&world, HEALTH_STORAGE_INDEX, 2 , [2]QWORD{enemies, npc})
+     bind_indices_to_data(&world, HEALTH_STORAGE_INDEX, enemies, npc)
 
 
      //release_indices_from_data (this will be slow), since we will assume it will rarely be called at runtime.
