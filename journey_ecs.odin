@@ -156,12 +156,17 @@ foreign _ {
      //extremely rarely. 
  }
 
+
+DataDetail :: struct {
+    indices_bytes_offset : QWORD,
+    data_size : QWORD,
+    current_index : QWORD,
+}
+
  //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
 DataStorage :: struct{
      blob : rawptr,
-     indices_byte_offset : QWORD,
-     data_size : QWORD,
-     current_index : QWORD,    
+    using detail : DataDetail,
  }
 
  @(optimization_mode="favor_size") 
@@ -203,39 +208,41 @@ DataStorage :: struct{
 
 
 //TODO:Khal indices_size will change since we are using a low..high 
- @(optimization_mode="favor_size") 
+@(optimization_mode="favor_size") 
  register_data_storage :: proc(world : ^World, $data_typeid : typeid, $data_storage_index : QWORD, $indices_capacity : QWORD)
 	where intrinsics.type_is_struct(data_typeid){
 
-		//Should we reserve the first index in the data storage?  What will we keep in it?
 		INDICES_SIZE :: indices_capacity * size_of(QWORD) * 2 / TILE_SIZE 
 		DATA_SIZE :: (indices_capacity * size_of(#soa[TILE_SIZE]data_typeid)) / TILE_SIZE
 
         TOTAL_SIZE :: (INDICES_SIZE + DATA_SIZE + 0xFFF) & 0xFFFFFFFFFFFFF000
 
 		{
-			world.data_storage[data_storage_index] = {
-				transmute(rawptr)intrinsics.syscall(
-					linux.SYS_mmap,
-					uintptr(0x00),
-					uintptr(TOTAL_SIZE),
-					uintptr(0x03),
-					uintptr(0x21),
-					~uintptr(0),
-					uintptr(0)),
-				INDICES_SIZE,
-                size_of(data_typeid),
-                0
-			}
 
-		}
+            data_storage : ^DataStorage = &world.data_storage[data_storage_index]
 
+            data_storage.blob =transmute(rawptr)intrinsics.syscall(
+                linux.SYS_mmap,
+				uintptr(0x00),
+				uintptr(TOTAL_SIZE),
+				uintptr(0x03),
+				uintptr(0x21),
+				~uintptr(0),
+				uintptr(0),
+            )
+
+
+            data_storage.detail = DataDetail{
+                INDICES_SIZE, size_of(data_typeid), 0
+            }
+
+	    }
 		//TODO:We may give advise how the allocation is used or something else. We don't really know the access pattern yet.
  }
 
 
  //Recycling is not implemented. (may not be implemented)
-@(enable_target_feature = "bmi2")
+@(optimization_mode="favor_size", enable_target_feature = "bmi2")
 create_indices :: proc(world : ^World, $bits_to_use : QWORD) -> QWORD{
 	NUMBER_OF_QWORD_OCCUPIED :: bits_to_use / 0x40
 	ALIGNED64_BITS_TO_USE :: NUMBER_OF_QWORD_OCCUPIED * 0x40
@@ -270,21 +277,25 @@ create_indices :: proc(world : ^World, $bits_to_use : QWORD) -> QWORD{
 
 //Should this take a slice of indices and work with indices?
 //We will check for exact matches of [index, length] when querying
+@(optimization_mode="favor_size")
 bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, $indices_count : QWORD, indices : [indices_count]QWORD) #no_bounds_check {
-    data_storage : DataStorage = ---
 
-    intrinsics.mem_copy_non_overlapping(&data_storage,&world.data_storage[storage_index], size_of(DataStorage))
+    data_storage : ^DataStorage = ---
+    blob_identifier_ptr : [^]QWORD = ---
     
-    for i in 0..<indices_count{
-        identifier_entry : [2]QWORD = ---
-        identifier_entry[0x00] = QWORD(DWORD(indices[i]))
-        identifier_entry[0x01] = QWORD(indices[i] / 0x100000000)
-        intrinsics.mem_copy(rawptr(uintptr(data_storage.blob) + uintptr(0x08 * (data_storage.current_index + i))), &identifier_entry ,size_of(QWORD))
+    data_storage = &world.data_storage[storage_index]
+    blob_identifier_ptr = transmute([^]QWORD)(uintptr(data_storage.blob) + uintptr(data_storage.current_index) * 0x10)
+    
+    //i < indices_count
+    for i : QWORD = 0; transmute(b64)(i - indices_count); i+=1{
 
+        blob_identifier_ptr[0x00] = QWORD(DWORD(indices[i]))
+        blob_identifier_ptr[0x01] = QWORD(indices[i] / 0x100000000)
+
+        blob_identifier_ptr = transmute([^]QWORD)(uintptr(blob_identifier_ptr) + 0x08)
     }
 
-
-    world.data_storage[storage_index].current_index = data_storage.current_index + indices_count
+    data_storage.current_index += indices_count
     
 }
 

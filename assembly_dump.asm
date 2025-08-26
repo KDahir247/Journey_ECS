@@ -1775,13 +1775,13 @@ Disassembly of section .text:
   402aba:	00 
   402abb:	48 8d bc 24 90 00 00 	lea    0x90(%rsp),%rdi
   402ac2:	00 
-  402ac3:	e8 08 41 00 00       	call   406bd0 <__$startup_runtime>
+  402ac3:	e8 68 3c 00 00       	call   406730 <__$startup_runtime>
   402ac8:	48 8d bc 24 90 00 00 	lea    0x90(%rsp),%rdi
   402acf:	00 
-  402ad0:	e8 5b 3c 00 00       	call   406730 <journey::main>
+  402ad0:	e8 8b 3c 00 00       	call   406760 <journey::main>
   402ad5:	48 8d bc 24 90 00 00 	lea    0x90(%rsp),%rdi
   402adc:	00 
-  402add:	e8 fe 40 00 00       	call   406be0 <__$cleanup_runtime>
+  402add:	e8 5e 3c 00 00       	call   406740 <__$cleanup_runtime>
   402ae2:	31 c0                	xor    %eax,%eax
   402ae4:	48 81 c4 28 01 00 00 	add    $0x128,%rsp
   402aeb:	c3                   	ret
@@ -5705,303 +5705,289 @@ Disassembly of section .text:
   406727:	66 0f 1f 84 00 00 00 	nopw   0x0(%rax,%rax,1)
   40672e:	00 00 
 
-0000000000406730 <journey::main>:
-  406730:	48 83 ec 58          	sub    $0x58,%rsp
-  406734:	48 89 7c 24 08       	mov    %rdi,0x8(%rsp)
-  406739:	48 8b 7c 24 08       	mov    0x8(%rsp),%rdi
-  40673e:	e8 a3 00 00 00       	call   4067e6 <journey::create_world:proc(indice_bit_capacity:$$900,unique_data_capacity:$$30)->(:journey::World)>
-  406743:	48 8b 74 24 08       	mov    0x8(%rsp),%rsi
-  406748:	48 89 54 24 38       	mov    %rdx,0x38(%rsp)
-  40674d:	48 89 44 24 30       	mov    %rax,0x30(%rsp)
-  406752:	48 8b 44 24 30       	mov    0x30(%rsp),%rax
-  406757:	48 8b 4c 24 38       	mov    0x38(%rsp),%rcx
-  40675c:	48 89 4c 24 50       	mov    %rcx,0x50(%rsp)
-  406761:	48 89 44 24 48       	mov    %rax,0x48(%rsp)
-  406766:	48 8d 7c 24 48       	lea    0x48(%rsp),%rdi
-  40676b:	48 89 3c 24          	mov    %rdi,(%rsp)
-  40676f:	e8 11 01 00 00       	call   406885 <journey::register_data_storage:proc(world:^journey::World,data_typeid:$journey::main::Health::$1,data_storage_index:$$0,indices_capacity:$$100)>
-  406774:	48 8b 3c 24          	mov    (%rsp),%rdi
-  406778:	48 8b 74 24 08       	mov    0x8(%rsp),%rsi
-  40677d:	e8 ae 01 00 00       	call   406930 <journey::create_indices:proc(world:^journey::World,bits_to_use:$$20)->(:journey::QWORD)>
-  406782:	48 8b 3c 24          	mov    (%rsp),%rdi
-  406786:	48 8b 74 24 08       	mov    0x8(%rsp),%rsi
-  40678b:	48 89 44 24 28       	mov    %rax,0x28(%rsp)
-  406790:	e8 7b 02 00 00       	call   406a10 <journey::create_indices:proc(world:^journey::World,bits_to_use:$$50)->(:journey::QWORD)>
-  406795:	48 8b 4c 24 08       	mov    0x8(%rsp),%rcx
-  40679a:	48 89 44 24 20       	mov    %rax,0x20(%rsp)
-  40679f:	0f 57 c0             	xorps  %xmm0,%xmm0
-  4067a2:	0f 29 44 24 10       	movaps %xmm0,0x10(%rsp)
-  4067a7:	48 c7 44 24 18 00 00 	movq   $0x0,0x18(%rsp)
-  4067ae:	00 00 
-  4067b0:	48 c7 44 24 10 00 00 	movq   $0x0,0x10(%rsp)
-  4067b7:	00 00 
-  4067b9:	48 8b 54 24 28       	mov    0x28(%rsp),%rdx
-  4067be:	48 8b 44 24 20       	mov    0x20(%rsp),%rax
-  4067c3:	48 89 54 24 10       	mov    %rdx,0x10(%rsp)
-  4067c8:	48 89 44 24 18       	mov    %rax,0x18(%rsp)
-  4067cd:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
-  4067d2:	48 8b 54 24 18       	mov    0x18(%rsp),%rdx
-  4067d7:	48 8d 7c 24 48       	lea    0x48(%rsp),%rdi
-  4067dc:	e8 0f 03 00 00       	call   406af0 <journey::bind_indices_to_data:proc(world:^journey::World,storage_index:$$0,indices_count:$$2,indices:[2]journey::QWORD)>
-  4067e1:	48 83 c4 58          	add    $0x58,%rsp
-  4067e5:	c3                   	ret
+0000000000406730 <__$startup_runtime>:
+  406730:	eb 00                	jmp    406732 <__$startup_runtime+0x2>
+  406732:	c3                   	ret
+  406733:	66 66 66 66 2e 0f 1f 	data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+  40673a:	84 00 00 00 00 00 
 
-00000000004067e6 <journey::create_world:proc(indice_bit_capacity:$$900,unique_data_capacity:$$30)->(:journey::World)>:
-  4067e6:	31 c0                	xor    %eax,%eax
-  4067e8:	41 89 c1             	mov    %eax,%r9d
-  4067eb:	4c 89 4c 24 b0       	mov    %r9,-0x50(%rsp)
-  4067f0:	b8 09 00 00 00       	mov    $0x9,%eax
-  4067f5:	48 89 44 24 d8       	mov    %rax,-0x28(%rsp)
-  4067fa:	be 00 10 00 00       	mov    $0x1000,%esi
-  4067ff:	48 89 74 24 d0       	mov    %rsi,-0x30(%rsp)
-  406804:	ba 03 00 00 00       	mov    $0x3,%edx
-  406809:	48 89 54 24 c8       	mov    %rdx,-0x38(%rsp)
-  40680e:	41 ba 21 00 00 00    	mov    $0x21,%r10d
-  406814:	4c 89 54 24 c0       	mov    %r10,-0x40(%rsp)
-  406819:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8
-  406820:	4c 89 44 24 b8       	mov    %r8,-0x48(%rsp)
-  406825:	4c 89 cf             	mov    %r9,%rdi
-  406828:	0f 05                	syscall
-  40682a:	4c 8b 4c 24 b0       	mov    -0x50(%rsp),%r9
-  40682f:	4c 8b 44 24 b8       	mov    -0x48(%rsp),%r8
-  406834:	4c 8b 54 24 c0       	mov    -0x40(%rsp),%r10
-  406839:	48 8b 54 24 c8       	mov    -0x38(%rsp),%rdx
-  40683e:	48 8b 74 24 d0       	mov    -0x30(%rsp),%rsi
-  406843:	48 89 c1             	mov    %rax,%rcx
-  406846:	48 8b 44 24 d8       	mov    -0x28(%rsp),%rax
-  40684b:	48 89 4c 24 f0       	mov    %rcx,-0x10(%rsp)
-  406850:	4c 89 cf             	mov    %r9,%rdi
-  406853:	0f 05                	syscall
-  406855:	48 89 44 24 f8       	mov    %rax,-0x8(%rsp)
-  40685a:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
-  40685f:	48 c7 00 40 00 00 00 	movq   $0x40,(%rax)
-  406866:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
-  40686b:	48 8b 4c 24 f8       	mov    -0x8(%rsp),%rcx
-  406870:	48 89 4c 24 e8       	mov    %rcx,-0x18(%rsp)
-  406875:	48 89 44 24 e0       	mov    %rax,-0x20(%rsp)
-  40687a:	48 8b 44 24 e0       	mov    -0x20(%rsp),%rax
-  40687f:	48 8b 54 24 e8       	mov    -0x18(%rsp),%rdx
-  406884:	c3                   	ret
+0000000000406740 <__$cleanup_runtime>:
+  406740:	50                   	push   %rax
+  406741:	48 89 3c 24          	mov    %rdi,(%rsp)
+  406745:	eb 00                	jmp    406747 <__$cleanup_runtime+0x7>
+  406747:	48 8b 3c 24          	mov    (%rsp),%rdi
+  40674b:	e8 40 aa ff ff       	call   401190 <runtime::[default_temporary_allocator.odin]::_destroy_temp_allocator_fini>
+  406750:	58                   	pop    %rax
+  406751:	c3                   	ret
+  406752:	66 2e 0f 1f 84 00 00 	cs nopw 0x0(%rax,%rax,1)
+  406759:	00 00 00 
+  40675c:	0f 1f 40 00          	nopl   0x0(%rax)
 
-0000000000406885 <journey::register_data_storage:proc(world:^journey::World,data_typeid:$journey::main::Health::$1,data_storage_index:$$0,indices_capacity:$$100)>:
-  406885:	48 89 7c 24 d0       	mov    %rdi,-0x30(%rsp)
-  40688a:	48 8b 44 24 d0       	mov    -0x30(%rsp),%rax
-  40688f:	48 89 44 24 f8       	mov    %rax,-0x8(%rsp)
-  406894:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
-  406899:	48 8b 00             	mov    (%rax),%rax
-  40689c:	48 89 44 24 c8       	mov    %rax,-0x38(%rsp)
-  4068a1:	0f 57 c0             	xorps  %xmm0,%xmm0
-  4068a4:	0f 29 44 24 e8       	movaps %xmm0,-0x18(%rsp)
-  4068a9:	0f 29 44 24 d8       	movaps %xmm0,-0x28(%rsp)
-  4068ae:	31 c0                	xor    %eax,%eax
-  4068b0:	41 89 c1             	mov    %eax,%r9d
-  4068b3:	4c 89 4c 24 f0       	mov    %r9,-0x10(%rsp)
-  4068b8:	4c 89 4c 24 d8       	mov    %r9,-0x28(%rsp)
-  4068bd:	48 c7 44 24 e8 08 00 	movq   $0x8,-0x18(%rsp)
-  4068c4:	00 00 
-  4068c6:	48 c7 44 24 e0 c8 00 	movq   $0xc8,-0x20(%rsp)
-  4068cd:	00 00 
-  4068cf:	b8 09 00 00 00       	mov    $0x9,%eax
-  4068d4:	be 00 10 00 00       	mov    $0x1000,%esi
-  4068d9:	ba 03 00 00 00       	mov    $0x3,%edx
-  4068de:	41 ba 21 00 00 00    	mov    $0x21,%r10d
-  4068e4:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8
-  4068eb:	4c 89 cf             	mov    %r9,%rdi
-  4068ee:	0f 05                	syscall
-  4068f0:	48 89 c1             	mov    %rax,%rcx
-  4068f3:	48 8b 44 24 c8       	mov    -0x38(%rsp),%rax
-  4068f8:	48 89 4c 24 d8       	mov    %rcx,-0x28(%rsp)
-  4068fd:	48 8b 4c 24 d8       	mov    -0x28(%rsp),%rcx
-  406902:	48 8b 54 24 e0       	mov    -0x20(%rsp),%rdx
-  406907:	48 8b 74 24 e8       	mov    -0x18(%rsp),%rsi
-  40690c:	48 8b 7c 24 f0       	mov    -0x10(%rsp),%rdi
-  406911:	48 89 78 18          	mov    %rdi,0x18(%rax)
-  406915:	48 89 70 10          	mov    %rsi,0x10(%rax)
-  406919:	48 89 50 08          	mov    %rdx,0x8(%rax)
-  40691d:	48 89 08             	mov    %rcx,(%rax)
-  406920:	c3                   	ret
-  406921:	66 66 66 66 66 66 2e 	data16 data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
-  406928:	0f 1f 84 00 00 00 00 
-  40692f:	00 
+0000000000406760 <journey::main>:
+  406760:	48 83 ec 58          	sub    $0x58,%rsp
+  406764:	48 89 7c 24 08       	mov    %rdi,0x8(%rsp)
+  406769:	48 8b 7c 24 08       	mov    0x8(%rsp),%rdi
+  40676e:	e8 a3 00 00 00       	call   406816 <journey::create_world:proc(indice_bit_capacity:$$900,unique_data_capacity:$$30)->(:journey::World)>
+  406773:	48 8b 74 24 08       	mov    0x8(%rsp),%rsi
+  406778:	48 89 54 24 38       	mov    %rdx,0x38(%rsp)
+  40677d:	48 89 44 24 30       	mov    %rax,0x30(%rsp)
+  406782:	48 8b 44 24 30       	mov    0x30(%rsp),%rax
+  406787:	48 8b 4c 24 38       	mov    0x38(%rsp),%rcx
+  40678c:	48 89 4c 24 50       	mov    %rcx,0x50(%rsp)
+  406791:	48 89 44 24 48       	mov    %rax,0x48(%rsp)
+  406796:	48 8d 7c 24 48       	lea    0x48(%rsp),%rdi
+  40679b:	48 89 3c 24          	mov    %rdi,(%rsp)
+  40679f:	e8 11 01 00 00       	call   4068b5 <journey::register_data_storage:proc(world:^journey::World,data_typeid:$journey::main::Health::$1,data_storage_index:$$0,indices_capacity:$$100)>
+  4067a4:	48 8b 3c 24          	mov    (%rsp),%rdi
+  4067a8:	48 8b 74 24 08       	mov    0x8(%rsp),%rsi
+  4067ad:	e8 78 01 00 00       	call   40692a <journey::create_indices:proc(world:^journey::World,bits_to_use:$$20)->(:journey::QWORD)>
+  4067b2:	48 8b 3c 24          	mov    (%rsp),%rdi
+  4067b6:	48 8b 74 24 08       	mov    0x8(%rsp),%rsi
+  4067bb:	48 89 44 24 28       	mov    %rax,0x28(%rsp)
+  4067c0:	e8 3f 02 00 00       	call   406a04 <journey::create_indices:proc(world:^journey::World,bits_to_use:$$50)->(:journey::QWORD)>
+  4067c5:	48 8b 4c 24 08       	mov    0x8(%rsp),%rcx
+  4067ca:	48 89 44 24 20       	mov    %rax,0x20(%rsp)
+  4067cf:	0f 57 c0             	xorps  %xmm0,%xmm0
+  4067d2:	0f 29 44 24 10       	movaps %xmm0,0x10(%rsp)
+  4067d7:	48 c7 44 24 18 00 00 	movq   $0x0,0x18(%rsp)
+  4067de:	00 00 
+  4067e0:	48 c7 44 24 10 00 00 	movq   $0x0,0x10(%rsp)
+  4067e7:	00 00 
+  4067e9:	48 8b 54 24 28       	mov    0x28(%rsp),%rdx
+  4067ee:	48 8b 44 24 20       	mov    0x20(%rsp),%rax
+  4067f3:	48 89 54 24 10       	mov    %rdx,0x10(%rsp)
+  4067f8:	48 89 44 24 18       	mov    %rax,0x18(%rsp)
+  4067fd:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+  406802:	48 8b 54 24 18       	mov    0x18(%rsp),%rdx
+  406807:	48 8d 7c 24 48       	lea    0x48(%rsp),%rdi
+  40680c:	e8 cd 02 00 00       	call   406ade <journey::bind_indices_to_data:proc(world:^journey::World,storage_index:$$0,indices_count:$$2,indices:[2]journey::QWORD)>
+  406811:	48 83 c4 58          	add    $0x58,%rsp
+  406815:	c3                   	ret
 
-0000000000406930 <journey::create_indices:proc(world:^journey::World,bits_to_use:$$20)->(:journey::QWORD)>:
-  406930:	48 89 7c 24 d0       	mov    %rdi,-0x30(%rsp)
-  406935:	48 8b 44 24 d0       	mov    -0x30(%rsp),%rax
-  40693a:	48 89 44 24 f8       	mov    %rax,-0x8(%rsp)
-  40693f:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
-  406944:	48 8b 40 08          	mov    0x8(%rax),%rax
-  406948:	48 8b 00             	mov    (%rax),%rax
-  40694b:	48 89 44 24 e8       	mov    %rax,-0x18(%rsp)
-  406950:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
-  406955:	48 8b 40 08          	mov    0x8(%rax),%rax
-  406959:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
-  40695e:	48 c1 e9 06          	shr    $0x6,%rcx
-  406962:	48 c1 e1 03          	shl    $0x3,%rcx
-  406966:	48 01 c8             	add    %rcx,%rax
-  406969:	48 89 44 24 d8       	mov    %rax,-0x28(%rsp)
-  40696e:	48 8b 44 24 d8       	mov    -0x28(%rsp),%rax
-  406973:	48 89 44 24 f0       	mov    %rax,-0x10(%rsp)
-  406978:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
-  40697d:	48 83 c1 14          	add    $0x14,%rcx
-  406981:	48 83 e1 3f          	and    $0x3f,%rcx
-  406985:	48 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%rax
-  40698c:	c4 e2 f0 f5 c0       	bzhi   %rcx,%rax,%rax
-  406991:	48 89 44 24 e0       	mov    %rax,-0x20(%rsp)
-  406996:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
-  40699b:	48 c7 00 ff ff ff ff 	movq   $0xffffffffffffffff,(%rax)
-  4069a2:	48 8b 44 24 e8       	mov    -0x18(%rsp),%rax
-  4069a7:	48 83 c0 14          	add    $0x14,%rax
-  4069ab:	48 c1 e8 06          	shr    $0x6,%rax
-  4069af:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
-  4069b4:	48 83 c1 00          	add    $0x0,%rcx
-  4069b8:	48 c1 e9 06          	shr    $0x6,%rcx
-  4069bc:	48 29 c8             	sub    %rcx,%rax
-  4069bf:	48 83 f8 00          	cmp    $0x0,%rax
-  4069c3:	75 0d                	jne    4069d2 <journey::create_indices:proc(world:^journey::World,bits_to_use:$$20)->(:journey::QWORD)+0xa2>
-  4069c5:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
-  4069ca:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
-  4069cf:	48 89 08             	mov    %rcx,(%rax)
-  4069d2:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
-  4069d7:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
-  4069dc:	48 89 48 08          	mov    %rcx,0x8(%rax)
-  4069e0:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
-  4069e5:	48 8b 40 08          	mov    0x8(%rax),%rax
-  4069e9:	48 8b 08             	mov    (%rax),%rcx
-  4069ec:	48 83 c1 14          	add    $0x14,%rcx
-  4069f0:	48 89 08             	mov    %rcx,(%rax)
-  4069f3:	48 8b 44 24 e8       	mov    -0x18(%rsp),%rax
-  4069f8:	48 83 e8 40          	sub    $0x40,%rax
-  4069fc:	48 b9 00 00 00 00 14 	movabs $0x1400000000,%rcx
-  406a03:	00 00 00 
-  406a06:	48 09 c8             	or     %rcx,%rax
-  406a09:	c3                   	ret
-  406a0a:	66 0f 1f 44 00 00    	nopw   0x0(%rax,%rax,1)
+0000000000406816 <journey::create_world:proc(indice_bit_capacity:$$900,unique_data_capacity:$$30)->(:journey::World)>:
+  406816:	31 c0                	xor    %eax,%eax
+  406818:	41 89 c1             	mov    %eax,%r9d
+  40681b:	4c 89 4c 24 b0       	mov    %r9,-0x50(%rsp)
+  406820:	b8 09 00 00 00       	mov    $0x9,%eax
+  406825:	48 89 44 24 d8       	mov    %rax,-0x28(%rsp)
+  40682a:	be 00 10 00 00       	mov    $0x1000,%esi
+  40682f:	48 89 74 24 d0       	mov    %rsi,-0x30(%rsp)
+  406834:	ba 03 00 00 00       	mov    $0x3,%edx
+  406839:	48 89 54 24 c8       	mov    %rdx,-0x38(%rsp)
+  40683e:	41 ba 21 00 00 00    	mov    $0x21,%r10d
+  406844:	4c 89 54 24 c0       	mov    %r10,-0x40(%rsp)
+  406849:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8
+  406850:	4c 89 44 24 b8       	mov    %r8,-0x48(%rsp)
+  406855:	4c 89 cf             	mov    %r9,%rdi
+  406858:	0f 05                	syscall
+  40685a:	4c 8b 4c 24 b0       	mov    -0x50(%rsp),%r9
+  40685f:	4c 8b 44 24 b8       	mov    -0x48(%rsp),%r8
+  406864:	4c 8b 54 24 c0       	mov    -0x40(%rsp),%r10
+  406869:	48 8b 54 24 c8       	mov    -0x38(%rsp),%rdx
+  40686e:	48 8b 74 24 d0       	mov    -0x30(%rsp),%rsi
+  406873:	48 89 c1             	mov    %rax,%rcx
+  406876:	48 8b 44 24 d8       	mov    -0x28(%rsp),%rax
+  40687b:	48 89 4c 24 f0       	mov    %rcx,-0x10(%rsp)
+  406880:	4c 89 cf             	mov    %r9,%rdi
+  406883:	0f 05                	syscall
+  406885:	48 89 44 24 f8       	mov    %rax,-0x8(%rsp)
+  40688a:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
+  40688f:	48 c7 00 40 00 00 00 	movq   $0x40,(%rax)
+  406896:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
+  40689b:	48 8b 4c 24 f8       	mov    -0x8(%rsp),%rcx
+  4068a0:	48 89 4c 24 e8       	mov    %rcx,-0x18(%rsp)
+  4068a5:	48 89 44 24 e0       	mov    %rax,-0x20(%rsp)
+  4068aa:	48 8b 44 24 e0       	mov    -0x20(%rsp),%rax
+  4068af:	48 8b 54 24 e8       	mov    -0x18(%rsp),%rdx
+  4068b4:	c3                   	ret
 
-0000000000406a10 <journey::create_indices:proc(world:^journey::World,bits_to_use:$$50)->(:journey::QWORD)>:
-  406a10:	48 89 7c 24 d0       	mov    %rdi,-0x30(%rsp)
-  406a15:	48 8b 44 24 d0       	mov    -0x30(%rsp),%rax
-  406a1a:	48 89 44 24 f8       	mov    %rax,-0x8(%rsp)
-  406a1f:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
-  406a24:	48 8b 40 08          	mov    0x8(%rax),%rax
-  406a28:	48 8b 00             	mov    (%rax),%rax
-  406a2b:	48 89 44 24 e8       	mov    %rax,-0x18(%rsp)
-  406a30:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
-  406a35:	48 8b 40 08          	mov    0x8(%rax),%rax
-  406a39:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
-  406a3e:	48 c1 e9 06          	shr    $0x6,%rcx
-  406a42:	48 c1 e1 03          	shl    $0x3,%rcx
-  406a46:	48 01 c8             	add    %rcx,%rax
-  406a49:	48 89 44 24 d8       	mov    %rax,-0x28(%rsp)
-  406a4e:	48 8b 44 24 d8       	mov    -0x28(%rsp),%rax
-  406a53:	48 89 44 24 f0       	mov    %rax,-0x10(%rsp)
-  406a58:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
-  406a5d:	48 83 c1 32          	add    $0x32,%rcx
-  406a61:	48 83 e1 3f          	and    $0x3f,%rcx
-  406a65:	48 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%rax
-  406a6c:	c4 e2 f0 f5 c0       	bzhi   %rcx,%rax,%rax
-  406a71:	48 89 44 24 e0       	mov    %rax,-0x20(%rsp)
-  406a76:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
-  406a7b:	48 c7 00 ff ff ff ff 	movq   $0xffffffffffffffff,(%rax)
-  406a82:	48 8b 44 24 e8       	mov    -0x18(%rsp),%rax
-  406a87:	48 83 c0 32          	add    $0x32,%rax
-  406a8b:	48 c1 e8 06          	shr    $0x6,%rax
-  406a8f:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
-  406a94:	48 83 c1 00          	add    $0x0,%rcx
-  406a98:	48 c1 e9 06          	shr    $0x6,%rcx
-  406a9c:	48 29 c8             	sub    %rcx,%rax
-  406a9f:	48 83 f8 00          	cmp    $0x0,%rax
-  406aa3:	75 0d                	jne    406ab2 <journey::create_indices:proc(world:^journey::World,bits_to_use:$$50)->(:journey::QWORD)+0xa2>
-  406aa5:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
-  406aaa:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
-  406aaf:	48 89 08             	mov    %rcx,(%rax)
-  406ab2:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
-  406ab7:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
-  406abc:	48 89 48 08          	mov    %rcx,0x8(%rax)
-  406ac0:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
-  406ac5:	48 8b 40 08          	mov    0x8(%rax),%rax
-  406ac9:	48 8b 08             	mov    (%rax),%rcx
-  406acc:	48 83 c1 32          	add    $0x32,%rcx
-  406ad0:	48 89 08             	mov    %rcx,(%rax)
-  406ad3:	48 8b 44 24 e8       	mov    -0x18(%rsp),%rax
-  406ad8:	48 83 e8 40          	sub    $0x40,%rax
-  406adc:	48 b9 00 00 00 00 32 	movabs $0x3200000000,%rcx
-  406ae3:	00 00 00 
-  406ae6:	48 09 c8             	or     %rcx,%rax
-  406ae9:	c3                   	ret
-  406aea:	66 0f 1f 44 00 00    	nopw   0x0(%rax,%rax,1)
+00000000004068b5 <journey::register_data_storage:proc(world:^journey::World,data_typeid:$journey::main::Health::$1,data_storage_index:$$0,indices_capacity:$$100)>:
+  4068b5:	48 89 7c 24 e8       	mov    %rdi,-0x18(%rsp)
+  4068ba:	48 8b 44 24 e8       	mov    -0x18(%rsp),%rax
+  4068bf:	48 89 44 24 f8       	mov    %rax,-0x8(%rsp)
+  4068c4:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
+  4068c9:	48 8b 00             	mov    (%rax),%rax
+  4068cc:	48 89 44 24 f0       	mov    %rax,-0x10(%rsp)
+  4068d1:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
+  4068d6:	48 89 44 24 e0       	mov    %rax,-0x20(%rsp)
+  4068db:	31 c0                	xor    %eax,%eax
+  4068dd:	41 89 c1             	mov    %eax,%r9d
+  4068e0:	b8 09 00 00 00       	mov    $0x9,%eax
+  4068e5:	be 00 10 00 00       	mov    $0x1000,%esi
+  4068ea:	ba 03 00 00 00       	mov    $0x3,%edx
+  4068ef:	41 ba 21 00 00 00    	mov    $0x21,%r10d
+  4068f5:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8
+  4068fc:	4c 89 cf             	mov    %r9,%rdi
+  4068ff:	0f 05                	syscall
+  406901:	48 89 c1             	mov    %rax,%rcx
+  406904:	48 8b 44 24 e0       	mov    -0x20(%rsp),%rax
+  406909:	48 89 08             	mov    %rcx,(%rax)
+  40690c:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
+  406911:	48 c7 40 18 00 00 00 	movq   $0x0,0x18(%rax)
+  406918:	00 
+  406919:	48 c7 40 10 08 00 00 	movq   $0x8,0x10(%rax)
+  406920:	00 
+  406921:	48 c7 40 08 c8 00 00 	movq   $0xc8,0x8(%rax)
+  406928:	00 
+  406929:	c3                   	ret
 
-0000000000406af0 <journey::bind_indices_to_data:proc(world:^journey::World,storage_index:$$0,indices_count:$$2,indices:[2]journey::QWORD)>:
-  406af0:	48 89 7c 24 88       	mov    %rdi,-0x78(%rsp)
-  406af5:	48 89 54 24 90       	mov    %rdx,-0x70(%rsp)
-  406afa:	48 89 74 24 98       	mov    %rsi,-0x68(%rsp)
-  406aff:	48 8b 44 24 98       	mov    -0x68(%rsp),%rax
-  406b04:	48 8b 4c 24 90       	mov    -0x70(%rsp),%rcx
-  406b09:	48 8b 54 24 88       	mov    -0x78(%rsp),%rdx
-  406b0e:	48 89 54 24 f8       	mov    %rdx,-0x8(%rsp)
-  406b13:	48 89 4c 24 f0       	mov    %rcx,-0x10(%rsp)
-  406b18:	48 89 44 24 e8       	mov    %rax,-0x18(%rsp)
-  406b1d:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
-  406b22:	48 8b 00             	mov    (%rax),%rax
-  406b25:	0f 10 00             	movups (%rax),%xmm0
-  406b28:	0f 10 48 10          	movups 0x10(%rax),%xmm1
-  406b2c:	0f 29 4c 24 d8       	movaps %xmm1,-0x28(%rsp)
-  406b31:	0f 29 44 24 c8       	movaps %xmm0,-0x38(%rsp)
-  406b36:	48 c7 44 24 c0 00 00 	movq   $0x0,-0x40(%rsp)
-  406b3d:	00 00 
-  406b3f:	48 c7 44 24 b8 00 00 	movq   $0x0,-0x48(%rsp)
-  406b46:	00 00 
-  406b48:	48 83 7c 24 c0 02    	cmpq   $0x2,-0x40(%rsp)
-  406b4e:	73 6a                	jae    406bba <journey::bind_indices_to_data:proc(world:^journey::World,storage_index:$$0,indices_count:$$2,indices:[2]journey::QWORD)+0xca>
-  406b50:	48 8b 44 24 c0       	mov    -0x40(%rsp),%rax
-  406b55:	48 89 44 24 b0       	mov    %rax,-0x50(%rsp)
-  406b5a:	48 8b 44 24 b0       	mov    -0x50(%rsp),%rax
-  406b5f:	48 8b 44 c4 e8       	mov    -0x18(%rsp,%rax,8),%rax
-  406b64:	89 c0                	mov    %eax,%eax
-  406b66:	48 89 44 24 a0       	mov    %rax,-0x60(%rsp)
-  406b6b:	48 8b 44 24 b0       	mov    -0x50(%rsp),%rax
-  406b70:	48 8b 44 c4 e8       	mov    -0x18(%rsp,%rax,8),%rax
-  406b75:	48 c1 e8 20          	shr    $0x20,%rax
-  406b79:	48 89 44 24 a8       	mov    %rax,-0x58(%rsp)
-  406b7e:	48 8b 44 24 c8       	mov    -0x38(%rsp),%rax
-  406b83:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
-  406b88:	48 03 4c 24 b0       	add    -0x50(%rsp),%rcx
-  406b8d:	48 c1 e1 03          	shl    $0x3,%rcx
-  406b91:	48 01 c8             	add    %rcx,%rax
-  406b94:	48 8b 4c 24 a0       	mov    -0x60(%rsp),%rcx
-  406b99:	48 89 08             	mov    %rcx,(%rax)
-  406b9c:	48 8b 44 24 c0       	mov    -0x40(%rsp),%rax
-  406ba1:	48 83 c0 01          	add    $0x1,%rax
-  406ba5:	48 89 44 24 c0       	mov    %rax,-0x40(%rsp)
-  406baa:	48 8b 44 24 b8       	mov    -0x48(%rsp),%rax
-  406baf:	48 83 c0 01          	add    $0x1,%rax
-  406bb3:	48 89 44 24 b8       	mov    %rax,-0x48(%rsp)
-  406bb8:	eb 8e                	jmp    406b48 <journey::bind_indices_to_data:proc(world:^journey::World,storage_index:$$0,indices_count:$$2,indices:[2]journey::QWORD)+0x58>
-  406bba:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
-  406bbf:	48 8b 00             	mov    (%rax),%rax
-  406bc2:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
-  406bc7:	48 83 c1 02          	add    $0x2,%rcx
-  406bcb:	48 89 48 18          	mov    %rcx,0x18(%rax)
-  406bcf:	c3                   	ret
+000000000040692a <journey::create_indices:proc(world:^journey::World,bits_to_use:$$20)->(:journey::QWORD)>:
+  40692a:	48 89 7c 24 d0       	mov    %rdi,-0x30(%rsp)
+  40692f:	48 8b 44 24 d0       	mov    -0x30(%rsp),%rax
+  406934:	48 89 44 24 f8       	mov    %rax,-0x8(%rsp)
+  406939:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
+  40693e:	48 8b 40 08          	mov    0x8(%rax),%rax
+  406942:	48 8b 00             	mov    (%rax),%rax
+  406945:	48 89 44 24 e8       	mov    %rax,-0x18(%rsp)
+  40694a:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
+  40694f:	48 8b 40 08          	mov    0x8(%rax),%rax
+  406953:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
+  406958:	48 c1 e9 06          	shr    $0x6,%rcx
+  40695c:	48 c1 e1 03          	shl    $0x3,%rcx
+  406960:	48 01 c8             	add    %rcx,%rax
+  406963:	48 89 44 24 d8       	mov    %rax,-0x28(%rsp)
+  406968:	48 8b 44 24 d8       	mov    -0x28(%rsp),%rax
+  40696d:	48 89 44 24 f0       	mov    %rax,-0x10(%rsp)
+  406972:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
+  406977:	48 83 c1 14          	add    $0x14,%rcx
+  40697b:	48 83 e1 3f          	and    $0x3f,%rcx
+  40697f:	48 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%rax
+  406986:	c4 e2 f0 f5 c0       	bzhi   %rcx,%rax,%rax
+  40698b:	48 89 44 24 e0       	mov    %rax,-0x20(%rsp)
+  406990:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
+  406995:	48 c7 00 ff ff ff ff 	movq   $0xffffffffffffffff,(%rax)
+  40699c:	48 8b 44 24 e8       	mov    -0x18(%rsp),%rax
+  4069a1:	48 83 c0 14          	add    $0x14,%rax
+  4069a5:	48 c1 e8 06          	shr    $0x6,%rax
+  4069a9:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
+  4069ae:	48 83 c1 00          	add    $0x0,%rcx
+  4069b2:	48 c1 e9 06          	shr    $0x6,%rcx
+  4069b6:	48 29 c8             	sub    %rcx,%rax
+  4069b9:	48 83 f8 00          	cmp    $0x0,%rax
+  4069bd:	75 0d                	jne    4069cc <journey::create_indices:proc(world:^journey::World,bits_to_use:$$20)->(:journey::QWORD)+0xa2>
+  4069bf:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
+  4069c4:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
+  4069c9:	48 89 08             	mov    %rcx,(%rax)
+  4069cc:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
+  4069d1:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
+  4069d6:	48 89 48 08          	mov    %rcx,0x8(%rax)
+  4069da:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
+  4069df:	48 8b 40 08          	mov    0x8(%rax),%rax
+  4069e3:	48 8b 08             	mov    (%rax),%rcx
+  4069e6:	48 83 c1 14          	add    $0x14,%rcx
+  4069ea:	48 89 08             	mov    %rcx,(%rax)
+  4069ed:	48 8b 44 24 e8       	mov    -0x18(%rsp),%rax
+  4069f2:	48 83 e8 40          	sub    $0x40,%rax
+  4069f6:	48 b9 00 00 00 00 14 	movabs $0x1400000000,%rcx
+  4069fd:	00 00 00 
+  406a00:	48 09 c8             	or     %rcx,%rax
+  406a03:	c3                   	ret
 
-0000000000406bd0 <__$startup_runtime>:
-  406bd0:	eb 00                	jmp    406bd2 <__$startup_runtime+0x2>
-  406bd2:	c3                   	ret
-  406bd3:	66 66 66 66 2e 0f 1f 	data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
-  406bda:	84 00 00 00 00 00 
+0000000000406a04 <journey::create_indices:proc(world:^journey::World,bits_to_use:$$50)->(:journey::QWORD)>:
+  406a04:	48 89 7c 24 d0       	mov    %rdi,-0x30(%rsp)
+  406a09:	48 8b 44 24 d0       	mov    -0x30(%rsp),%rax
+  406a0e:	48 89 44 24 f8       	mov    %rax,-0x8(%rsp)
+  406a13:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
+  406a18:	48 8b 40 08          	mov    0x8(%rax),%rax
+  406a1c:	48 8b 00             	mov    (%rax),%rax
+  406a1f:	48 89 44 24 e8       	mov    %rax,-0x18(%rsp)
+  406a24:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
+  406a29:	48 8b 40 08          	mov    0x8(%rax),%rax
+  406a2d:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
+  406a32:	48 c1 e9 06          	shr    $0x6,%rcx
+  406a36:	48 c1 e1 03          	shl    $0x3,%rcx
+  406a3a:	48 01 c8             	add    %rcx,%rax
+  406a3d:	48 89 44 24 d8       	mov    %rax,-0x28(%rsp)
+  406a42:	48 8b 44 24 d8       	mov    -0x28(%rsp),%rax
+  406a47:	48 89 44 24 f0       	mov    %rax,-0x10(%rsp)
+  406a4c:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
+  406a51:	48 83 c1 32          	add    $0x32,%rcx
+  406a55:	48 83 e1 3f          	and    $0x3f,%rcx
+  406a59:	48 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%rax
+  406a60:	c4 e2 f0 f5 c0       	bzhi   %rcx,%rax,%rax
+  406a65:	48 89 44 24 e0       	mov    %rax,-0x20(%rsp)
+  406a6a:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
+  406a6f:	48 c7 00 ff ff ff ff 	movq   $0xffffffffffffffff,(%rax)
+  406a76:	48 8b 44 24 e8       	mov    -0x18(%rsp),%rax
+  406a7b:	48 83 c0 32          	add    $0x32,%rax
+  406a7f:	48 c1 e8 06          	shr    $0x6,%rax
+  406a83:	48 8b 4c 24 e8       	mov    -0x18(%rsp),%rcx
+  406a88:	48 83 c1 00          	add    $0x0,%rcx
+  406a8c:	48 c1 e9 06          	shr    $0x6,%rcx
+  406a90:	48 29 c8             	sub    %rcx,%rax
+  406a93:	48 83 f8 00          	cmp    $0x0,%rax
+  406a97:	75 0d                	jne    406aa6 <journey::create_indices:proc(world:^journey::World,bits_to_use:$$50)->(:journey::QWORD)+0xa2>
+  406a99:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
+  406a9e:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
+  406aa3:	48 89 08             	mov    %rcx,(%rax)
+  406aa6:	48 8b 44 24 f0       	mov    -0x10(%rsp),%rax
+  406aab:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
+  406ab0:	48 89 48 08          	mov    %rcx,0x8(%rax)
+  406ab4:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
+  406ab9:	48 8b 40 08          	mov    0x8(%rax),%rax
+  406abd:	48 8b 08             	mov    (%rax),%rcx
+  406ac0:	48 83 c1 32          	add    $0x32,%rcx
+  406ac4:	48 89 08             	mov    %rcx,(%rax)
+  406ac7:	48 8b 44 24 e8       	mov    -0x18(%rsp),%rax
+  406acc:	48 83 e8 40          	sub    $0x40,%rax
+  406ad0:	48 b9 00 00 00 00 32 	movabs $0x3200000000,%rcx
+  406ad7:	00 00 00 
+  406ada:	48 09 c8             	or     %rcx,%rax
+  406add:	c3                   	ret
 
-0000000000406be0 <__$cleanup_runtime>:
-  406be0:	50                   	push   %rax
-  406be1:	48 89 3c 24          	mov    %rdi,(%rsp)
-  406be5:	eb 00                	jmp    406be7 <__$cleanup_runtime+0x7>
-  406be7:	48 8b 3c 24          	mov    (%rsp),%rdi
-  406beb:	e8 a0 a5 ff ff       	call   401190 <runtime::[default_temporary_allocator.odin]::_destroy_temp_allocator_fini>
-  406bf0:	58                   	pop    %rax
-  406bf1:	c3                   	ret
+0000000000406ade <journey::bind_indices_to_data:proc(world:^journey::World,storage_index:$$0,indices_count:$$2,indices:[2]journey::QWORD)>:
+  406ade:	48 89 7c 24 b8       	mov    %rdi,-0x48(%rsp)
+  406ae3:	48 89 54 24 c0       	mov    %rdx,-0x40(%rsp)
+  406ae8:	48 89 74 24 c8       	mov    %rsi,-0x38(%rsp)
+  406aed:	48 8b 44 24 c8       	mov    -0x38(%rsp),%rax
+  406af2:	48 8b 4c 24 c0       	mov    -0x40(%rsp),%rcx
+  406af7:	48 8b 54 24 b8       	mov    -0x48(%rsp),%rdx
+  406afc:	48 89 54 24 f8       	mov    %rdx,-0x8(%rsp)
+  406b01:	48 89 4c 24 f0       	mov    %rcx,-0x10(%rsp)
+  406b06:	48 89 44 24 e8       	mov    %rax,-0x18(%rsp)
+  406b0b:	48 8b 44 24 f8       	mov    -0x8(%rsp),%rax
+  406b10:	48 8b 00             	mov    (%rax),%rax
+  406b13:	48 89 44 24 e0       	mov    %rax,-0x20(%rsp)
+  406b18:	48 8b 44 24 e0       	mov    -0x20(%rsp),%rax
+  406b1d:	48 8b 00             	mov    (%rax),%rax
+  406b20:	48 8b 4c 24 e0       	mov    -0x20(%rsp),%rcx
+  406b25:	48 8b 49 18          	mov    0x18(%rcx),%rcx
+  406b29:	48 c1 e1 04          	shl    $0x4,%rcx
+  406b2d:	48 01 c8             	add    %rcx,%rax
+  406b30:	48 89 44 24 d8       	mov    %rax,-0x28(%rsp)
+  406b35:	48 c7 44 24 d0 00 00 	movq   $0x0,-0x30(%rsp)
+  406b3c:	00 00 
+  406b3e:	48 8b 44 24 d0       	mov    -0x30(%rsp),%rax
+  406b43:	48 83 e8 02          	sub    $0x2,%rax
+  406b47:	48 83 f8 00          	cmp    $0x0,%rax
+  406b4b:	74 49                	je     406b96 <journey::bind_indices_to_data:proc(world:^journey::World,storage_index:$$0,indices_count:$$2,indices:[2]journey::QWORD)+0xb8>
+  406b4d:	48 8b 44 24 d8       	mov    -0x28(%rsp),%rax
+  406b52:	48 8b 4c 24 d0       	mov    -0x30(%rsp),%rcx
+  406b57:	48 8b 4c cc e8       	mov    -0x18(%rsp,%rcx,8),%rcx
+  406b5c:	89 c9                	mov    %ecx,%ecx
+  406b5e:	48 89 08             	mov    %rcx,(%rax)
+  406b61:	48 8b 44 24 d8       	mov    -0x28(%rsp),%rax
+  406b66:	48 8b 4c 24 d0       	mov    -0x30(%rsp),%rcx
+  406b6b:	48 8b 4c cc e8       	mov    -0x18(%rsp,%rcx,8),%rcx
+  406b70:	48 c1 e9 20          	shr    $0x20,%rcx
+  406b74:	48 89 48 08          	mov    %rcx,0x8(%rax)
+  406b78:	48 8b 44 24 d8       	mov    -0x28(%rsp),%rax
+  406b7d:	48 83 c0 08          	add    $0x8,%rax
+  406b81:	48 89 44 24 d8       	mov    %rax,-0x28(%rsp)
+  406b86:	48 8b 44 24 d0       	mov    -0x30(%rsp),%rax
+  406b8b:	48 83 c0 01          	add    $0x1,%rax
+  406b8f:	48 89 44 24 d0       	mov    %rax,-0x30(%rsp)
+  406b94:	eb a8                	jmp    406b3e <journey::bind_indices_to_data:proc(world:^journey::World,storage_index:$$0,indices_count:$$2,indices:[2]journey::QWORD)+0x60>
+  406b96:	48 8b 44 24 e0       	mov    -0x20(%rsp),%rax
+  406b9b:	48 8b 48 18          	mov    0x18(%rax),%rcx
+  406b9f:	48 83 c1 02          	add    $0x2,%rcx
+  406ba3:	48 89 48 18          	mov    %rcx,0x18(%rax)
+  406ba7:	c3                   	ret
 
 Disassembly of section .fini:
 
-0000000000406bf4 <_fini>:
-  406bf4:	f3 0f 1e fa          	endbr64
-  406bf8:	48 83 ec 08          	sub    $0x8,%rsp
-  406bfc:	48 83 c4 08          	add    $0x8,%rsp
-  406c00:	c3                   	ret
+0000000000406ba8 <_fini>:
+  406ba8:	f3 0f 1e fa          	endbr64
+  406bac:	48 83 ec 08          	sub    $0x8,%rsp
+  406bb0:	48 83 c4 08          	add    $0x8,%rsp
+  406bb4:	c3                   	ret
