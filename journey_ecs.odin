@@ -221,7 +221,7 @@ DataStorage :: struct{
 
             data_storage : ^DataStorage = &world.data_storage[data_storage_index]
 
-            data_storage.blob =transmute(rawptr)intrinsics.syscall(
+            data_storage.blob = transmute(rawptr)intrinsics.syscall(
                 linux.SYS_mmap,
 				uintptr(0x00),
 				uintptr(TOTAL_SIZE),
@@ -233,14 +233,14 @@ DataStorage :: struct{
 
 
             data_storage.detail = DataDetail{
-                0,INDICES_SIZE, size_of(data_typeid)
+                0, INDICES_SIZE, size_of(data_typeid)
             }
 
 	    }
 		//TODO:We may give advise how the allocation is used or something else. We don't really know the access pattern yet.
  }
 
-
+//TODO:Khal optimize me
  //Recycling is not implemented. (may not be implemented)
 @(optimization_mode="favor_size", enable_target_feature = "bmi2")
 create_indices :: proc(world : ^World, $bits_to_use : QWORD) -> QWORD{
@@ -275,8 +275,6 @@ create_indices :: proc(world : ^World, $bits_to_use : QWORD) -> QWORD{
 	return (bits_to_use * 0x100000000) | (current_bit_used - 0x40)
 }
 
-//Should this take a slice of indices and work with indices?
-//We will check for exact matches of [index, length] when querying
 @(optimization_mode="favor_size")
 bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [$N]QWORD) #no_bounds_check {
 
@@ -296,11 +294,10 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
         blob_identifier_ptr[0x00] = QWORD(DWORD(current_indice))
         blob_identifier_ptr[0x01] = QWORD(current_indice / 0x100000000)
 
-        blob_identifier_ptr = transmute([^]QWORD)(uintptr(blob_identifier_ptr) + 0x08)
+        blob_identifier_ptr = transmute([^]QWORD)(uintptr(blob_identifier_ptr) + 0x10)
     }
 
     data_storage.current_index += N
-    
 }
 
  //Used for testing.
