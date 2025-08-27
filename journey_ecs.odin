@@ -170,7 +170,7 @@ DataStorage :: struct{
  }
 
  @(optimization_mode="favor_size") 
- create_world :: #force_inline proc ($indice_bit_capacity : QWORD, $unique_data_capacity : QWORD) -> World
+ create_world :: proc ($indice_bit_capacity : QWORD, $unique_data_capacity : QWORD) -> World
 	where indice_bit_capacity > 0 && unique_data_capacity > 0{
 		world : World = ---
 
@@ -212,6 +212,7 @@ DataStorage :: struct{
  register_data_storage :: proc(world : ^World, $data_typeid : typeid, $data_storage_index : QWORD, $indices_capacity : QWORD)
 	where intrinsics.type_is_struct(data_typeid){
 
+        //TODO:Khal we need to make sure that INDICE_SIZE is aligned to 32 for optimal SIMD 
 		INDICES_SIZE :: indices_capacity * size_of(QWORD) * 2 / TILE_SIZE 
 		DATA_SIZE :: (indices_capacity * size_of(#soa[TILE_SIZE]data_typeid)) / TILE_SIZE
 
@@ -304,31 +305,55 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
  main :: proc(){
 
      HEALTH_STORAGE_INDEX :: 0
-     
-	 world : World = ---
+     NPC_POSITION_STORAGE_INDEX :: 1
+     ENEMY_POSITION_STORAGE_INDEX :: 2
+
 
 	 Health :: struct{
-		 c : f32,
-         d : f32,
+		 bar : f32,
 	 }
 
+     Position :: struct{
+         x : f32,
+         y : f32,
+     }
+
+
+     world : World = ---
+
 	 world = create_world(900, 30)
-	 register_data_storage(&world, Health, HEALTH_STORAGE_INDEX, 100)
      
+     //Register Health "component" in the world. (max of 100 "entities")
+	 register_data_storage(&world, Health, HEALTH_STORAGE_INDEX, 100)
+
+     //Register (NPC) Position "component" in the world. (max of 200 "entities")
+     register_data_storage(&world, Position, NPC_POSITION_STORAGE_INDEX, 200)
+     
+     //Register (Enemy) Position "component" in the world. (max of 300 "entities")
+     register_data_storage(&world, Position, ENEMY_POSITION_STORAGE_INDEX, 300)
+     
+     //Create 20 "entities"
 	 enemies := create_indices(&world, 20)
+     //Create 50 "entities"
 	 npc := create_indices(&world, 50)
 
      bind_indices_to_data(&world, HEALTH_STORAGE_INDEX, [2]QWORD{enemies, npc})
+     bind_indices_to_data(&world, NPC_POSITION_STORAGE_INDEX, [1]QWORD{npc})
+     bind_indices_to_data(&world, ENEMY_POSITION_STORAGE_INDEX, [1]QWORD{enemies})
 
-
+     //Procedure to work on:
      //release_indices_from_data (this will be slow), since we will assume it will rarely be called at runtime.
-
-     
-	 //b := world.indices[0x00] / 0x40 
-
-	 //for i in 1..=b{
-	 //	 fmt.println("index: ",world.indices[i])
-	 //}
-
-
+     //Get identifier with datas
+     //get identifier from data
+     //Has data?
+     //Get Data?
+     //Set Data?
+     //Get All Data?
+     //Removing individual Data will be really slow
+     //Removing bulk data will be faster.
+     //Fetch Alive entities
+     //Query
+     //Run
+     //Recylce "entity" (Way later... or possible no implemented)
+    
  }
