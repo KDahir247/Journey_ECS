@@ -1,8 +1,14 @@
 package journey
 
+
 import "base:intrinsics"
 import "core:sys/linux"
+
+
+//Debug use
+import "base:runtime"
 import "core:fmt"
+
 
 /*
    What is the problem (informal):
@@ -128,6 +134,62 @@ import "core:fmt"
 
  TILE_SIZE :: 8
 
+////////////////////////////////////////////////// Tooling/Debugging ////////////////////////////////////////
+
+
+/*
+Take every procedure. Output every data change throughout a some reasonable run. Every change.
+Every parameter that's passed. Every value that's stored. Every variable in the procedure.
+Dump them all. Then look at the values. Then find a different way to look at the values.
+I guarantee there will be surprises that will change the way you understand the problem and change the way you think it should be solved.
+You simply cannot write good solutions without understanding the data, at least on some level.
+And the better you understand it, the better solutions you'll be able to provide. (Mike Acton)
+
+Completely agree
+
+*/
+DUMP :: #config(CSV_DUMP, false)
+
+when DUMP && ODIN_DEBUG {
+
+    //We don't need to store alignment, since we are allocating pages so it is aligned to pages
+    PointerData :: struct{
+        request_size : QWORD,
+        page_size : QWORD,
+        used_bytes : QWORD,
+        data_size : QWORD,
+    }
+    
+    CSVParameter :: struct{
+        root : ^runtime.Type_Info,
+        ptr_param : []PointerData, //Store the pointer sizes in the struct sequentially.
+    }
+
+
+    InitializeCSV :: proc(){
+
+        //Populate the ptr_param we are going to use a temp allocation for the ptr_param
+        traverse_structure :: proc(){
+            
+
+
+
+
+        }
+        
+
+
+    }
+
+
+    
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
 
 //Dont have this in my version of Odin
 @(private, default_calling_convention = "none")
@@ -149,7 +211,7 @@ foreign _ {
  //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
  //For destroying the world we will use a null Dealloc (let the OS reclaim the pages after the application ends). Thus we will not store data
  //for deallocation
- World :: struct{
+World :: struct{
 	 data_storage : [^]DataStorage,
 	 indices : [^]QWORD,
      //very cold data for handling adding and removing of data_storage (blob) adding and removing data and indices at runtime will be considered
@@ -158,8 +220,8 @@ foreign _ {
 
 
 DataDetail :: struct {
-    current_index : QWORD,
-    indices_bytes_offset : QWORD,
+    current_bytes_offset : QWORD,
+    indices_bytes_offset : QWORD, 
     data_size : QWORD,
 }
 
@@ -283,7 +345,7 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
     blob_identifier_ptr : [^]QWORD = ---
     
     data_storage = &world.data_storage[storage_index]
-    blob_identifier_ptr = transmute([^]QWORD)(uintptr(data_storage.blob) + uintptr(data_storage.current_index) * 0x10)
+    blob_identifier_ptr = transmute([^]QWORD)(uintptr(data_storage.blob) + uintptr(data_storage.current_bytes_offset))
     
     //i < indices_count
     for i : QWORD = 0; transmute(b64)(i - N); i+=1{
@@ -298,10 +360,10 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
         blob_identifier_ptr = transmute([^]QWORD)(uintptr(blob_identifier_ptr) + 0x10)
     }
 
-    data_storage.current_index += N
+    data_storage.current_bytes_offset += (N * 0x10)
 }
 
- //Used for testing.
+ //Used for testing. Remove when fully implemented.
  main :: proc(){
 
      HEALTH_STORAGE_INDEX :: 0
@@ -341,13 +403,19 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
      bind_indices_to_data(&world, NPC_POSITION_STORAGE_INDEX, [1]QWORD{npc})
      bind_indices_to_data(&world, ENEMY_POSITION_STORAGE_INDEX, [1]QWORD{enemies})
 
-     //Procedure to work on:
+
+     
+
+
+
+     
+     //TODO:Khal Procedure to work on:
      //release_indices_from_data (this will be slow), since we will assume it will rarely be called at runtime.
      //Get identifier with datas
      //get identifier from data
      //Has data?
-     //Get Data?
-     //Set Data?
+     //Get Data bulk?
+     //Set Data bulk?
      //Get All Data?
      //Removing individual Data will be really slow
      //Removing bulk data will be faster.

@@ -8,6 +8,24 @@ a solution (input, output, constraint, goals)
 4) A proof that the solution satisfies the
 requisite conditions. 
 
+-Take every procedure. Output every data change throughout a some reasonable run. Every change. Every parameter that's passed. Every value that's stored. Every variable in the procedure. Dump them all. Then look at the values. Then find a different way to look at the values. I guarantee there will be surprises that will change the way you understand the problem and change the way you think it should be solved. You simply cannot write good solutions without understanding the data, at least on some level. And the better you understand it, the better solutions you'll be able to provide. (Mike Acton)
+
+- For any issue, always stop and figure out how you can understand the real problem better first, before you decide on any solutions.
+
+- Organize data in a way that when processed the code will follow similar paths
+
+- Keep it in order, and you shall receive!
+
+- Application should solve for the common case not all the case. This is important. Solve only the things that matter to the user and solve it really well. 
+
+- Does everything need to run at 60, 240, 144 fps (eg. door, dialouge)?
+
+- Don’t lean on customization as a crutch. Make sure your default design works well for most users, then add customization as a bonus, not a fix.
+
+- Effective addresses (Virtual Address) are used to index into the correct cache set. It then check each set.
+
+- Primitive type are passed by value (POD type eg u8, u16, u32, etc.... and Vector type __m126, __m256, __m512, etc.....)
+
 - Is registry struct good? They are just struct with function ptr for a core execution. eg. log_registry contains only function ptr to print log in console and what not. 
 
 - All programs are about transforming data.
