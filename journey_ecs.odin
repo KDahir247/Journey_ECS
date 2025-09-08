@@ -8,6 +8,7 @@ import "core:sys/linux"
 //Debug use
 import "base:runtime"
 import "core:fmt"
+import "core:strings"
 
 
 /*
@@ -134,59 +135,113 @@ import "core:fmt"
 
  TILE_SIZE :: 8
 
-////////////////////////////////////////////////// Tooling/Debugging ////////////////////////////////////////
+ DUMP :: #config(CSV_DUMP, false)
 
+when ODIN_DEBUG && DUMP{
 
-/*
-Take every procedure. Output every data change throughout a some reasonable run. Every change.
-Every parameter that's passed. Every value that's stored. Every variable in the procedure.
-Dump them all. Then look at the values. Then find a different way to look at the values.
-I guarantee there will be surprises that will change the way you understand the problem and change the way you think it should be solved.
-You simply cannot write good solutions without understanding the data, at least on some level.
-And the better you understand it, the better solutions you'll be able to provide. (Mike Acton)
-
-Completely agree
-
-*/
-DUMP :: #config(CSV_DUMP, false)
-
-when DUMP && ODIN_DEBUG {
-
-    //We don't need to store alignment, since we are allocating pages so it is aligned to pages
-    PointerData :: struct{
-        request_size : QWORD,
-        page_size : QWORD,
-        used_bytes : QWORD,
-        data_size : QWORD,
-    }
+    //We don't care about perf here. We are using this for dumping.
     
-    CSVParameter :: struct{
-        root : ^runtime.Type_Info,
-        ptr_param : []PointerData, //Store the pointer sizes in the struct sequentially.
+    CSVColumn ::struct{
+        header : string,
+        data : [dynamic]QWORD,
+    }
+
+    CSVDump :: struct{
+        cols : []CSVColumn,
+        index : map[string]QWORD,
+        highest : QWORD,
     }
 
 
-    InitializeCSV :: proc(){
+    csv_global : CSVDump
+    csv_index : QWORD = 0
+    @(init)
+    setup_csv :: proc(){
+        csv_global.cols = make([]CSVColumn, 64)
+        csv_global.index = make_map(map[string]QWORD)
 
-        //Populate the ptr_param we are going to use a temp allocation for the ptr_param
-        traverse_structure :: proc(){
-            
+     }
+
+    append_csv :: proc($header : string, data : QWORD){
+
+        occupied := header in csv_global.index
 
 
+        if !occupied{
+            csv_global.index[header] = csv_global.highest
+            csv_global.highest += 1
+        }
 
+
+        index := csv_global.index[header]
+       
+        if csv_global.cols[index].header == "" {
+            csv_global.cols[index] = { header, make([dynamic]QWORD, 0, 64)}
+        }
+
+        runtime.append_elem(&csv_global.cols[index].data, data)
+
+
+    }
+
+    dump_csv_to_file :: proc($path : cstring){
+        
+        max_data_length := 0
+
+        builder := strings.builder_make()
+
+        
+        for index in 0..=csv_global.highest{
+            if index < csv_global.highest{
+                strings.write_string(&builder, csv_global.cols[index].header)
+
+                strings.write_string(&builder, ", ")
+            }else{
+                strings.write_string(&builder, csv_global.cols[index].header)
+                strings.write_string(&builder, "\n")
+            }
+
+
+            if len(csv_global.cols[index].data) > max_data_length{
+                max_data_length = len(csv_global.cols[index].data)
+            }
 
         }
-        
+
+        for i in 0..<max_data_length{
 
 
+            for index in 0..<csv_global.highest{
+                
+                current_col := &csv_global.cols[index]
+
+                if (len(current_col.data) - 1) < i{
+                    strings.write_string(&builder, "-1")
+                }else{
+
+                    strings.write_u64(&builder, u64(current_col.data[i]))                    
+                }
+
+                if index != (csv_global.highest - 1){
+
+                    strings.write_string(&builder, ", ")
+                }else{
+                    strings.write_string(&builder, "\n")
+                    //fmt.println(index, "end")
+                }
+                
+
+            }
+
+        }
+
+
+        file_handle, _ := linux.open(path, {.RDWR, .CREAT}, {.IWUSR, .IRUSR})
+
+        linux.truncate(path, 0)
+        linux.write(file_handle, builder.buf[:])
     }
-
-
-    
 }
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
 
@@ -198,14 +253,6 @@ foreign _ {
 	bzhi_u32 :: proc(a, index: u32) -> u32 ---
 	@(link_name = "llvm.x86.bmi.bzhi.64")
 	bzhi_u64 :: proc(a, index: u64) -> u64 ---
-	@(link_name = "llvm.x86.bmi.pdep.32")
-	pdep_u32 :: proc(a, mask: u32) -> u32 ---
-	@(link_name = "llvm.x86.bmi.pdep.64")
-	pdep_u64 :: proc(a, mask: u64) -> u64 ---
-	@(link_name = "llvm.x86.bmi.pext.32")
-	pext_u32 :: proc(a, mask: u32) -> u32 ---
-	@(link_name = "llvm.x86.bmi.pext.64")
-	pext_u64 :: proc(a, mask: u64) -> u64 ---
 }
 
  //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
@@ -263,6 +310,22 @@ DataStorage :: struct{
 		 
 		}
 
+
+        when ODIN_DEBUG && DUMP{
+
+            append_csv("w i/r indices_bit_capacity", indice_bit_capacity)
+            append_csv("w i/r unique_data_capacity", unique_data_capacity)
+            append_csv("w l/r target_unique_data_capcity", TARGET_UNIQUE_DATA_CAPACITY)
+            append_csv("w l/r target_indices_capacity", TARGET_INDICES_CAPACITY)
+            append_csv("w r target_unique_data_page_size", (TARGET_UNIQUE_DATA_CAPACITY + 0xFFF) & 0xFFFFFFFFFFFFF000)
+            append_csv("w r target_indices_page_size", (TARGET_INDICES_CAPACITY + 0x7FFF) / PAGE_BIT_SIZE * PAGE_SIZE)
+            append_csv("w o/w data_storage_address", QWORD(uintptr(world.data_storage)))
+            append_csv("w o/w indices_address", QWORD(uintptr(world.indices)))
+            append_csv("w o/w world_address", QWORD(uintptr(&world)))
+        }
+        
+        
+
 		//TODO:We may give advise how the allocation is used or something else. We don't really know the access pattern yet.
 		return world
 	 	  
@@ -301,7 +364,23 @@ DataStorage :: struct{
 
 	    }
 		//TODO:We may give advise how the allocation is used or something else. We don't really know the access pattern yet.
- }
+        
+
+        when ODIN_DEBUG && DUMP{
+
+            append_csv("r i/rw world_address", QWORD(uintptr(world)))
+            append_csv("r i/r data_storage_index", data_storage_index)
+            append_csv("r i/r indices_capacity", indices_capacity)
+            append_csv("r l/r indices_size", INDICES_SIZE)
+            append_csv("r l/r data_size", DATA_SIZE)
+            append_csv("r l/r total_size", TOTAL_SIZE)
+            append_csv("r o/w current_bytes_offset", 0)
+            append_csv("r o/w indice_bytes_offset", INDICES_SIZE)
+            append_csv("r o/w data_size", size_of(data_typeid))
+            
+
+        }
+}
 
 //TODO:Khal optimize me
  //Recycling is not implemented. (may not be implemented)
@@ -335,6 +414,26 @@ create_indices :: proc(world : ^World, $bits_to_use : QWORD) -> QWORD{
 
 	world.indices[0x00] += bits_to_use
 
+
+    
+    when ODIN_DEBUG && DUMP{
+
+        append_csv("i i/rw world_address", QWORD(uintptr(world)))
+        append_csv("i i/r bits_to_use", bits_to_use)
+        append_csv("i l/r qword_occupied", NUMBER_OF_QWORD_OCCUPIED)
+        append_csv("i l/r aligned64_bits_to_use", ALIGNED64_BITS_TO_USE)
+        append_csv("i l/r current_bit_used", current_bit_used)
+        append_csv("i l/r current_indice_index", current_bit_used / 0x40)
+        append_csv("i l/r remaining_bits", remaining_bit_mask)
+        carry_over := !transmute(b64)(((current_bit_used + bits_to_use) / QWORD_BIT_SIZE) - ((current_bit_used + ALIGNED64_BITS_TO_USE) / QWORD_BIT_SIZE))
+        append_csv("i l/r is_bits_carried_over", QWORD(carry_over))
+        append_csv("i o/w target_bit_used", world.indices[0x00])
+        append_csv("i o/w target_indice_index", world.indices[0x00] / 0x40)
+        append_csv("i o/w indice", (bits_to_use * 0x100000000) | (current_bit_used - 0x40))
+
+
+    }
+    
 	return (bits_to_use * 0x100000000) | (current_bit_used - 0x40)
 }
 
@@ -361,6 +460,24 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
     }
 
     data_storage.current_bytes_offset += (N * 0x10)
+
+
+    when ODIN_DEBUG && DUMP{
+
+        append_csv("b i/r world_address", QWORD(uintptr(world)))
+        append_csv("b i/r storage_index", storage_index)
+        for i in 0..<N{
+            append_csv("b i/r indices_array", indices[i])
+            append_csv("b o/r current_bit_used_indices", QWORD(DWORD(indices[i])))
+            append_csv("b o/r current_bit_to_use_indices", QWORD(indices[i] / 0x100000000))
+        }
+
+        append_csv("b l/rw blob", QWORD(uintptr(data_storage.blob)))
+        append_csv("b l/rw end blob", QWORD(uintptr(blob_identifier_ptr)))
+        append_csv("b l/rw data_storage_address", QWORD(uintptr(data_storage)))
+        append_csv("b o/rw previous_data_storage_current_byte_offset", data_storage.current_bytes_offset - (N * 0x10))
+        append_csv("b o/rw data_storage_current_byte_offset", data_storage.current_bytes_offset)
+    }
 }
 
  //Used for testing. Remove when fully implemented.
@@ -369,8 +486,14 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
      HEALTH_STORAGE_INDEX :: 0
      NPC_POSITION_STORAGE_INDEX :: 1
      ENEMY_POSITION_STORAGE_INDEX :: 2
+     PROP_STORAGE_INDEX :: 7
 
-
+     PropData :: struct{
+         foo : QWORD,
+         bar : DWORD,
+         baz : DWORD,
+     }
+     
 	 Health :: struct{
 		 bar : f32,
 	 }
@@ -383,29 +506,52 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
 
      world : World = ---
 
-	 world = create_world(900, 30)
      
+	 world = create_world(900, 30)
+     world = create_world(100,57)
+     world = create_world(575, 123)
+     world = create_world(236, 353)
+     world = create_world(345, 512)
+     world = create_world(1, 2)
+     world = create_world(53, 24)
+     world = create_world(999, 1)
+     world = create_world(1, 999)
+     
+     /*
      //Register Health "component" in the world. (max of 100 "entities")
 	 register_data_storage(&world, Health, HEALTH_STORAGE_INDEX, 100)
 
      //Register (NPC) Position "component" in the world. (max of 200 "entities")
      register_data_storage(&world, Position, NPC_POSITION_STORAGE_INDEX, 200)
+
+     //prop data
+     register_data_storage(&world, PropData, PROP_STORAGE_INDEX, 123)
      
      //Register (Enemy) Position "component" in the world. (max of 300 "entities")
      register_data_storage(&world, Position, ENEMY_POSITION_STORAGE_INDEX, 300)
-     
+
+     props := create_indices(&world, 53)
      //Create 20 "entities"
 	 enemies := create_indices(&world, 20)
      //Create 50 "entities"
 	 npc := create_indices(&world, 50)
+     npc_merchant := create_indices(&world, 37)
 
+     bind_indices_to_data(&world, PROP_STORAGE_INDEX, [1]QWORD{props})
      bind_indices_to_data(&world, HEALTH_STORAGE_INDEX, [2]QWORD{enemies, npc})
      bind_indices_to_data(&world, NPC_POSITION_STORAGE_INDEX, [1]QWORD{npc})
      bind_indices_to_data(&world, ENEMY_POSITION_STORAGE_INDEX, [1]QWORD{enemies})
-
-
+     bind_indices_to_data(&world, NPC_POSITION_STORAGE_INDEX, [1]QWORD{npc_merchant})
+     bind_indices_to_data(&world, HEALTH_STORAGE_INDEX, [1]QWORD{npc_merchant})
+     */
+     
      
 
+     when ODIN_DEBUG && DUMP{
+
+         dump_csv_to_file("/home/khalid/Documents/GitHub/Journey_ECS/dump.csv")
+
+     }
 
 
      

@@ -1,0 +1,75 @@
+﻿ w o/w data_storage_address, w o/w indices_address, w o/w world_address,,Table Index,DataStorage Address Delta,Indices Address Delta,Indice+Data page size,Data Page Size bound,Indice Page size bound,
+140224986017792,140224986013696,140724398210952,,"""3-2""",-8192,-8192,8192,1,1,
+140224986009600,140224986005504,140724398210952,,"""4-3""",-8192,-8192,8192,1,1,
+140224986001408,140224985997312,140724398210952,,"""5-4""",-16384,-16384,8192,1,1,
+140224985985024,140224985980928,140724398210952,,"""6-5""",-20480,-20480,16384,1,1,
+140224985964544,140224985960448,140724398210952,,"""7-6""",-8192,-8192,20480,1,1,
+140224985956352,140224985952256,140724398210952,,"""8-7""",-8192,-8192,8192,1,1,
+140224985948160,140224985944064,140724398210952,,"""9-8""",-8192,-8192,8192,1,1,
+140224985939968,140224985935872,140724398210952,,"""10-9""",-36864,-36864,8192,1,1,
+140224985903104,140224985899008,140724398210952,,,,,36864,1,1,
+,,,,,,,,,,
+,,,,,,,,,,
+,,,,,Desc,L1 Cache,L2 Cache,L3 Cache,,
+,,,,,Cache Size,32768,512000,33554432,,
+,,,,,Ways,8,8,16,,
+,,,,,Cache Line,64,64,64,,
+Row1,L1 Cache,L2 Cache,L3 Cache,,Set,64,1000,32768,,
+Set Position data_storage,0,528,27584,,Critical Stride,4096,64000,2097152,,
+Set Position indices,0,464,27520,,,,,,,
+Set Position world,62.125,46.125,4350.125,,,,,,,
+,,,,,,,,,,
+Row2,L1 Cache,L2 Cache,L3 Cache,,,,,,,
+Set Position data_storage,0,400,27456,,,,,,,
+Set Position indices,0,336,27392,,,,,,,
+Set Position world,62.125,46.125,4350.125,,"Intresting so using ways + 1 mmap or virtual alloc (4096 aligned) will cause eviction on the L1 cache. To utilize the full L1 cache we need to use the number of ways of mmap/virtual alloc. To Avoid thrashing we can reuse mmap or virtual alloc
+Each 64 byte offset of 4096 will map to the next set
+So the hardware prefetches in set not ways",,,,,
+,,,,,,,,,,
+Row3,L1 Cache,L2 Cache,L3 Cache,,,,,,,
+Set Position data_storage,0,272,27328,,,,,,,
+Set Position indices,0,208,27264,,,,,,,
+Set Position world,62.125,46.125,4350.125,,"On AMD Zen processors, the L1D cache is
+virtually indexed and physically tagged (VIPT). 
+So we use the offset (use to point to the first byte in cache)  +
+  index which is used to get the set in the cache
+Both use the virtual address
+
+ we use the tag to get the specific way in a given set
+uses the physical address
+
+source: https://gruss.cc/files/takeaway.pdf",,,,,
+,,,,,,,,,,
+Row4,L1 Cache,L2 Cache,L3 Cache,,,,,,,
+Set Position data_storage,0,16,27072,,,,,,,
+Set Position indices,0,952,27008,,,,,,,
+Set Position world,62.125,46.125,4350.125,,,,,,,
+,,,,,,,,,,
+Row5,L1 Cache,L2 Cache,L3 Cache,,,,,,,
+Set Position data_storage,0,696,26752,,,,,,,
+Set Position indices,0,632,26688,,,,,,,
+Set Position world,62.125,46.125,4350.125,,,,,,,
+,,,,,,,,,,
+Row6,L1 Cache,L2 Cache,L3 Cache,,,,,,,
+Set Position data_storage,0,568,26624,,,,,,,
+Set Position indices,0,504,26560,,,,,,,
+Set Position world,62.125,46.125,4350.125,,,,,,,
+,,,,,,,,,,
+Row7,L1 Cache,L2 Cache,L3 Cache,,,,,,,
+Set Position data_storage,0,440,26496,,,,,,,
+Set Position indices,0,376,26432,,,,,,,
+Set Position world,62.125,46.125,4350.125,,,,,,,
+,,,,,,,,,,
+Row8,L1 Cache,L2 Cache,L3 Cache,,,,,,,
+Set Position data_storage,0,312,26368,,,,,,,
+Set Position indices,0,248,26304,,,,,,,
+Set Position world,62.125,46.125,4350.125,,,,,,,
+,,,,,,,,,,
+Row9,L1 Cache,L2 Cache,L3 Cache,,,,,,,
+Set Position data_storage,0,736,25792,,,,,,,
+Set Position indices,0,672,25728,,,,,,,
+Set Position world,62.125,46.125,4350.125,,,,,,,
+,,,,,,,,,,
+
+
+
