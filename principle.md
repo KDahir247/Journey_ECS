@@ -3,7 +3,7 @@
 - When programming follow this rule;
 1) A brief informal statement of the problem
 2) The precise correctness conditions required of
-a solution (input, output, constraint, goals)
+a solution (input, output, constraint (bound on solution), goals, limit (bound on input))
 3) The solution
 4) A proof that the solution satisfies the
 requisite conditions. 
@@ -13,6 +13,8 @@ requisite conditions.
 - For any issue, always stop and figure out how you can understand the real problem better first, before you decide on any solutions.
 
 - Organize data in a way that when processed the code will follow similar paths
+
+- We want instruction bytes to be as little as possible so for front end fetch it can fetch more instructions for decoding. It also utilizes all the decoder, since >= 8 bytes can only be decoded by one decoder.
 
 - Keep it in order, and you shall receive!
 

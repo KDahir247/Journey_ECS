@@ -4,12 +4,9 @@ package journey
 import "base:intrinsics"
 import "core:sys/linux"
 
-
 //Debug use
-import "base:runtime"
 import "core:fmt"
 import "core:strings"
-
 
 /*
    What is the problem (informal):
@@ -86,8 +83,16 @@ import "core:strings"
    majority of the procedure of this library will be done in bulk
 
    The library will not a builtin component events (such as on value change, on component added, on component removed, etc....). This will force
-   the user to pay higher memory usage and performance even though they may not use it. The end user can implement it over the library if needed.
-   --------------------------------------------------------------------------------------------
+   the user to pay higher memory usage and performance even though they may not use it. The end user can implement it over the library if needed. 
+
+   There will not be deleting data or indices after we bind it to a blob. We may reuse it (free list), but there will be no structural changes after binding to the blob. 
+   Except for querying and grouping. This will not happen every frame rather it will happen in the initialization. 
+ 
+   Deleting data or removing data will be implemented by the user on top of this 
+   For example the may hold a free list for each type of data and indices that need to be reused because of world streaming. If dealing with
+   multiple thread than the can hold a free list per thread for each chunk which will hold the reusable when in this case doing world streaming.
+   In other words composition over this primitive implementation to cater their use case.
+--------------------------------------------------------------------------------------------
    Assumption:
 
    The library will assume each data is unique for example you can register more than on Position. The interpretation of the data is up to the user not the library.
@@ -101,8 +106,10 @@ import "core:strings"
    We will assume that the each unique data will be stored in homogenous collection.
 
    We will assume that manipulating the organization of the data will happen less frequently than the actual system.
-   eg. Adding Removing or Querying the data will happen less frequently than transforming the data.
-   --------------------------------------------------------------------------------------------
+   eg. Adding, Querying the data will happen less frequently than transforming the data. Removing the data will never happen in this implementation
+   Reusing data may happen but the implementation is up to the user and should not cause structural change.
+
+--------------------------------------------------------------------------------------------
    Goals:
 
    Data organization and easy query sets of data for transform.
@@ -114,28 +121,43 @@ import "core:strings"
 
    We need to organize the data in a way where the actual transform implemented by the user is set up to be really fast and optimized because of how the data is organized.
 
-   We need to organize the data in a way to allow the end user to use both SIMD and single types on the data when implementing the transform.
+   We need to organize the data in a way to allow the end user to use both SIMD and single types on the data when implementing the transform. 
+
+   ECS contains simple filter for example checking if a "entity" is within two columnar pages and it usually stops there.
+   Can we add more filter while still making it fast for example some of the SQL filter that are reasonable and frequently used in games
 
  */
 
- BYTE :: distinct u8
- WORD :: distinct u16
- DWORD :: distinct u32
- QWORD :: distinct u64
+//Assume user has atleast 8, 12, or 16. 
+//Assume user support SSE2, SSE3, SSSE3, SSE4.1, SSE4.2, AVX, AVX2
+//Assume user has 16, 32 gb, and 64 gb of ram
 
+BYTE :: distinct u8
+WORD :: distinct u16
+DWORD :: distinct u32
+QWORD :: distinct u64
+SIGNED32 :: distinct i32
+SIGNED64 :: distinct i64
 
+BYTES_BIT_SIZE :: 8
+WORD_BIT_SIZE :: 16
+DWORD_BIT_SIZE :: 32
+QWORD_BIT_SIZE :: 64
 
- BYTES_BIT_SIZE :: 8
- WORD_BIT_SIZE :: 16
- DWORD_BIT_SIZE :: 32
- QWORD_BIT_SIZE :: 64
+CACHE_LINE :: 64
+PAGE_SIZE :: 4096
+PAYLOAD_SIZE :: 3904
+PAGE_BIT_SIZE :: PAGE_SIZE * 8
 
- PAGE_SIZE :: 4096
- PAGE_BIT_SIZE :: PAGE_SIZE * 8
+XMM_BYTES :: 16
+YMM_BYTES :: 32
+ZMM_BYTES :: 64
 
- TILE_SIZE :: 8
 
  DUMP :: #config(CSV_DUMP, false)
+ LOGICAL_CORE_COUNT :: #config(CORE, 8)
+ PHYSICAL_CORE_COUNT :: LOGICAL_CORE_COUNT / 2
+
 
 when ODIN_DEBUG && DUMP{
 
@@ -227,9 +249,7 @@ when ODIN_DEBUG && DUMP{
                     strings.write_string(&builder, ", ")
                 }else{
                     strings.write_string(&builder, "\n")
-                    //fmt.println(index, "end")
                 }
-                
 
             }
 
@@ -243,242 +263,287 @@ when ODIN_DEBUG && DUMP{
     }
 }
 
-
-
-
-//Dont have this in my version of Odin
-@(private, default_calling_convention = "none")
-foreign _ {
-	@(link_name = "llvm.x86.bmi.bzhi.32")
-	bzhi_u32 :: proc(a, index: u32) -> u32 ---
-	@(link_name = "llvm.x86.bmi.bzhi.64")
-	bzhi_u64 :: proc(a, index: u64) -> u64 ---
+PageThreadAccess :: enum{
+    ThreadLocal,
+    ThreadReadonly,
+    ThreadReadWrite,
 }
 
- //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
- //For destroying the world we will use a null Dealloc (let the OS reclaim the pages after the application ends). Thus we will not store data
- //for deallocation
-World :: struct{
-	 data_storage : [^]DataStorage,
-	 indices : [^]QWORD,
-     //very cold data for handling adding and removing of data_storage (blob) adding and removing data and indices at runtime will be considered
-     //extremely rarely. 
- }
+PageStructuralOperation :: enum{
+    StructuralChange,
+    NoStructuralChange,
+}
+
+PageDataAccess :: enum{
+    InputOutput,
+    Input,
+    Output,
+}
+
+PageMode :: enum{
+    SIMD8,
+    SIMD4,
+    MASK8,
+    MASK4, 
+    SCALAR,
+}
+
+StructuralOperation :: enum u8{
+    PUSH, 
+    POP,
+    GROW,
+    SHRINK,
+}
 
 
-DataDetail :: struct {
-    current_bytes_offset : QWORD,
-    indices_bytes_offset : QWORD, 
+World :: struct($PAGE_COUNT : QWORD, $THREAD_COUNT : QWORD) #align(64){
+    header : [^]TableHeader,
+    columnar_table : [^]ColumnarPage(PAGE_COUNT),
+    owner_thread_id : QWORD,
+    ds_ops : [^]DSOperation,
+    dso_buffer : [^]BYTE,
+    //TODO:Khal structure layout is not done yet.
+    free_list : [^]FreeList,
+    sync_frame_gen : QWORD,
+    _padding_ : QWORD,
+    
+    sync_point : [4]AtomicSynchronization,
+}
+
+PushOp :: struct{
+    //implement me
+}
+
+PopOp :: struct{
+    //implement me
+}
+
+
+GrowOp :: struct{ 
+    //implement me
+}
+
+ShrinkOp :: struct{
+    //implement me
+}
+
+//TODO:Khal we might shrink this to be 4 byte struct (each enum is u8)
+TableHeader :: struct{
+    thread_access : PageThreadAccess,
+    structural_op : PageStructuralOperation,
+    data_access : PageDataAccess,
+    page_mode : PageMode,
+}
+
+FreeList :: struct{
+    temp : QWORD,
+    //implement me
+}
+
+
+ColumnarHeader :: struct #align(64){
+    allocated_data_bytes : QWORD,
+    data_bytes_per_core : QWORD,
+    reserved_data_bytes : QWORD,
+    reserved_data_bytes_per_core : QWORD,
     data_size : QWORD,
+    data_alignment : QWORD,
+    start_indices : QWORD,
+    end_indices : QWORD,
 }
 
- //What is the access order (Hot first, Cold last) are the data meaning full for the structure (for the computer)
-DataStorage :: struct{
-     blob : rawptr,
-    using detail : DataDetail,
+
+ColumnarPage :: struct($PAGE_COUNT: QWORD){
+    header : ColumnarHeader,
+    //used too zero out payload data for unused "entity" (eg. when "entity is dead the bit_zero_mask specific position is set to zero" than the bit_zero_mask is converted to a simd mask to mask out the deleted entities payload
+    bit_zero_mask : [PAGE_COUNT * 128]BYTE,
+    payload : [(PAGE_COUNT * 3904) + ((PAGE_COUNT - 1) * size_of(ColumnarHeader))]BYTE
+}
+
+
+//To get the base we need (65536 * thread_id + per_thread_cursor)
+DSOperation :: struct{
+    op : StructuralOperation,
+    thread_id : u8, 
+}
+
+
+AtomicSynchronization :: struct #align(64){
+    atomic_bitmask : DWORD,
+    //TODO:Khal add sync metadata if needed
+}
+
+//Happy
+@(optimization_mode="favor_size") 
+init_world :: proc (world : ^World($page_count, $thread_count), $unique_data_capacity : QWORD)
+where page_count > 0 && thread_count <= 4 #no_bounds_check{
+
+    {
+        buffer_address : uintptr = ---
+
+        HEADER :: TableHeader
+        COLUMNAR :: ColumnarPage(page_count)
+
+        TOTAL_COLUMNAR_BYTES :: size_of(COLUMNAR) * unique_data_capacity
+
+        TOTAL_HEADER_SIZE :: (size_of(TableHeader) * unique_data_capacity + 0xFFF) & 0xFFFFFFFFFFFFF000
+
+        TOTAL_SIZE :: TOTAL_COLUMNAR_BYTES + TOTAL_HEADER_SIZE
+
+        buffer_address = intrinsics.syscall(
+            linux.SYS_mmap,
+            0x00,
+            uintptr(TOTAL_SIZE),
+            uintptr(0x03),
+            uintptr(0x21),
+            ~uintptr(0),
+            uintptr(0),
+        )
+
+        world.header = cast(^HEADER)(buffer_address)
+        world.columnar_table = cast([^]COLUMNAR)(buffer_address + uintptr(TOTAL_HEADER_SIZE))
+    }
+
+    world.owner_thread_id = QWORD(intrinsics.syscall(linux.SYS_gettid))
+    
+    {
+        DEFAULT_DS_SIZE :: 65536
+      
+        TOTAL_DS_OP_SIZE :: (DEFAULT_DS_SIZE * thread_count / 2 + 0xFFF) & 0xFFFFFFFFFFFFF000
+        TOTAL_DS_BUFFER_SIZE :: (DEFAULT_DS_SIZE * thread_count + 0xFFF) & 0xFFFFFFFFFFFFF000
+        
+        world.ds_ops = cast([^]DSOperation)intrinsics.syscall(
+            linux.SYS_mmap,
+            0x00,
+            uintptr(TOTAL_DS_OP_SIZE),
+            uintptr(0x03),
+            uintptr(0x21),
+            ~uintptr(0),
+            uintptr(0),
+        )       
+
+        world.dso_buffer = cast([^]BYTE)intrinsics.syscall(
+            linux.SYS_mmap,
+            0x00,
+            uintptr(TOTAL_DS_BUFFER_SIZE),
+            uintptr(0x03),
+            uintptr(0x21),
+            ~uintptr(0),
+            uintptr(0),
+        )         
+    }
+
  }
 
- @(optimization_mode="favor_size") 
- create_world :: proc ($indice_bit_capacity : QWORD, $unique_data_capacity : QWORD) -> World
-	where indice_bit_capacity > 0 && unique_data_capacity > 0{
-		world : World = ---
 
-		TARGET_UNIQUE_DATA_CAPACITY :: unique_data_capacity  * size_of(DataStorage)
-		TARGET_INDICES_CAPACITY :: (indice_bit_capacity + 0x08) 
+//TODO:Khal we need to reimplement this
+@(optimization_mode="favor_size", enable_target_feature="avx,avx2")
+register_columnar :: proc(world : ^World($page_count, $thread_count), $data_typeid : typeid, $table_index : QWORD, $lane_count : QWORD, $start : QWORD, $end : QWORD)
+	where intrinsics.type_is_struct(data_typeid) && end > start &&  (lane_count & 0x01) == 0 && page_count > 0 && thread_count <= 4{
 
-		{
-			world.data_storage = transmute([^]DataStorage)intrinsics.syscall(
-				linux.SYS_mmap,
-				0x00,
-				uintptr((TARGET_UNIQUE_DATA_CAPACITY + 0xFFF) & 0xFFFFFFFFFFFFF000),
-				uintptr(0x03),
-				uintptr(0x21),
-				~uintptr(0),
-				uintptr(0))
+        //We are still only using 24 bytes in the world.
+        {
+            //TODO:Khal make the naming generic. Remove Data
+            INDICES_CAPACITY :: end - start
+            WORKING_CHUNK :: (INDICES_CAPACITY + lane_count - 0x01) / lane_count
+            EVEN_WORKING_CHUNK :: (WORKING_CHUNK + PHYSICAL_CORE_COUNT - 1) / PHYSICAL_CORE_COUNT * PHYSICAL_CORE_COUNT
+            DATA_NEEDED_RAW_BYTES :: size_of(#soa[lane_count]data_typeid) * EVEN_WORKING_CHUNK
+            ALIGN_CACHE_DATA_RAW_BYTES :: (DATA_NEEDED_RAW_BYTES + 0x3F) & 0xFFFFFFFFFFFFFFC0
+            OCCUPIED_CACHE_LINE :: ALIGN_CACHE_DATA_RAW_BYTES / 0x40
+            EVEN_CACHE_LINE :: (OCCUPIED_CACHE_LINE + PHYSICAL_CORE_COUNT - 1) / PHYSICAL_CORE_COUNT * PHYSICAL_CORE_COUNT
+            TARGET_DATA_RAW_BYTES :: EVEN_CACHE_LINE * 0x40
 
-			//idea: first byte will be used for recycled entities each bit that is 1 will represent which index an entity has been removed the entity bit can be determined by using BMI possibly.
-			 world.indices = transmute([^]QWORD)intrinsics.syscall(
-				 linux.SYS_mmap,
-				 0x00,
-				 uintptr((TARGET_INDICES_CAPACITY + 0x7FFF) / PAGE_BIT_SIZE * PAGE_SIZE),
-				 uintptr(0x03),
-				 uintptr(0x21),
-				 ~uintptr(0),
-				 uintptr(0))
+            //Bottleneck on pagefault.
+            
+            world.columnar_table[table_index].header = {
+                TARGET_DATA_RAW_BYTES,
+                TARGET_DATA_RAW_BYTES / PHYSICAL_CORE_COUNT,
+                (PAYLOAD_SIZE * QWORD(PAGE_COUNT)) - TARGET_DATA_RAW_BYTES,
+                (PAYLOAD_SIZE * QWORD(PAGE_COUNT) - TARGET_DATA_RAW_BYTES) / PHYSICAL_CORE_COUNT,
+                size_of(data_typeid),
+                align_of(data_typeid),
+                start,
+                end,
+            }
+        }
 
-			 world.indices[0x00] = 0x40
-		 
-		}
-
-
-        when ODIN_DEBUG && DUMP{
-
-            append_csv("w i/r indices_bit_capacity", indice_bit_capacity)
-            append_csv("w i/r unique_data_capacity", unique_data_capacity)
-            append_csv("w l/r target_unique_data_capcity", TARGET_UNIQUE_DATA_CAPACITY)
-            append_csv("w l/r target_indices_capacity", TARGET_INDICES_CAPACITY)
-            append_csv("w r target_unique_data_page_size", (TARGET_UNIQUE_DATA_CAPACITY + 0xFFF) & 0xFFFFFFFFFFFFF000)
-            append_csv("w r target_indices_page_size", (TARGET_INDICES_CAPACITY + 0x7FFF) / PAGE_BIT_SIZE * PAGE_SIZE)
-            append_csv("w o/w data_storage_address", QWORD(uintptr(world.data_storage)))
-            append_csv("w o/w indices_address", QWORD(uintptr(world.indices)))
-            append_csv("w o/w world_address", QWORD(uintptr(&world)))
+        {
+            when align_of(data_typeid) == 8{
+                world.header.meta_list[table_index].page_mode = PageMode.SIMD4
+            }else when align_of(data_typeid) > 8 || align_of(data_typeid) < 4{
+                world.header.meta_list[table_index].page_mode = PageMode.SCALAR
+            }else when align_of(data_typeid) == 4{
+                world.header.meta_list[table_index].page_mode = PageMode.SIMD8
+            }
         }
         
-        
-
-		//TODO:We may give advise how the allocation is used or something else. We don't really know the access pattern yet.
-		return world
-	 	  
- }
-
-
-//TODO:Khal indices_size will change since we are using a low..high 
-@(optimization_mode="favor_size") 
- register_data_storage :: proc(world : ^World, $data_typeid : typeid, $data_storage_index : QWORD, $indices_capacity : QWORD)
-	where intrinsics.type_is_struct(data_typeid){
-
-        //TODO:Khal we need to make sure that INDICE_SIZE is aligned to 32 for optimal SIMD 
-		INDICES_SIZE :: indices_capacity * size_of(QWORD) * 2 / TILE_SIZE 
-		DATA_SIZE :: (indices_capacity * size_of(#soa[TILE_SIZE]data_typeid)) / TILE_SIZE
-
-        TOTAL_SIZE :: (INDICES_SIZE + DATA_SIZE + 0xFFF) & 0xFFFFFFFFFFFFF000
-
-		{
-
-            data_storage : ^DataStorage = &world.data_storage[data_storage_index]
-
-            data_storage.blob = transmute(rawptr)intrinsics.syscall(
-                linux.SYS_mmap,
-				uintptr(0x00),
-				uintptr(TOTAL_SIZE),
-				uintptr(0x03),
-				uintptr(0x21),
-				~uintptr(0),
-				uintptr(0),
-            )
-
-
-            data_storage.detail = DataDetail{
-                0, INDICES_SIZE, size_of(data_typeid)
-            }
-
-	    }
-		//TODO:We may give advise how the allocation is used or something else. We don't really know the access pattern yet.
-        
-
-        when ODIN_DEBUG && DUMP{
-
-            append_csv("r i/rw world_address", QWORD(uintptr(world)))
-            append_csv("r i/r data_storage_index", data_storage_index)
-            append_csv("r i/r indices_capacity", indices_capacity)
-            append_csv("r l/r indices_size", INDICES_SIZE)
-            append_csv("r l/r data_size", DATA_SIZE)
-            append_csv("r l/r total_size", TOTAL_SIZE)
-            append_csv("r o/w current_bytes_offset", 0)
-            append_csv("r o/w indice_bytes_offset", INDICES_SIZE)
-            append_csv("r o/w data_size", size_of(data_typeid))
+        //TODO Set up the free list
+        {
             
 
         }
-}
-
-//TODO:Khal optimize me
- //Recycling is not implemented. (may not be implemented)
-@(optimization_mode="favor_size", enable_target_feature = "bmi2")
-create_indices :: proc(world : ^World, $bits_to_use : QWORD) -> QWORD{
-	NUMBER_OF_QWORD_OCCUPIED :: bits_to_use / 0x40
-	ALIGNED64_BITS_TO_USE :: NUMBER_OF_QWORD_OCCUPIED * 0x40
-
-	indices_buffer : [^]QWORD = ---
-	current_bit_used : QWORD = ---
-	remaining_bit_mask : QWORD = ---
-	
-	current_bit_used = world.indices[0x00]
-
-	indices_buffer = world.indices[current_bit_used / QWORD_BIT_SIZE:]
-	remaining_bit_mask = QWORD(bzhi_u64(u64(0xFFFFFFFFFFFFFFFF), u64(current_bit_used + bits_to_use) % QWORD_BIT_SIZE))//(1 << (total_bit_used % QWORD_BIT_SIZE)) - 1	
-
-    when NUMBER_OF_QWORD_OCCUPIED > 0{
-	    for i in 0..<NUMBER_OF_QWORD_OCCUPIED{
-		    indices_buffer[i] = 0xFFFFFFFFFFFFFFFF
-        }
     }
 
-	indices_buffer[NUMBER_OF_QWORD_OCCUPIED] = 0xFFFFFFFFFFFFFFFF
 
-	if !transmute(b64)(((current_bit_used + bits_to_use) / QWORD_BIT_SIZE) - ((current_bit_used + ALIGNED64_BITS_TO_USE) / QWORD_BIT_SIZE)){
-		indices_buffer[NUMBER_OF_QWORD_OCCUPIED] = remaining_bit_mask
-	}
-
-	indices_buffer[NUMBER_OF_QWORD_OCCUPIED + 1] = remaining_bit_mask
-
-	world.indices[0x00] += bits_to_use
-
+//Runtime change on the columnar metadata require sync after call
+commit_to_columnar :: proc(world : ^$T/World, $table_index : QWORD, $commit_count : QWORD){
+    commited_data_bytes : QWORD = ---
 
     
-    when ODIN_DEBUG && DUMP{
+    columnar := &world.columnar_table[table_index]
 
-        append_csv("i i/rw world_address", QWORD(uintptr(world)))
-        append_csv("i i/r bits_to_use", bits_to_use)
-        append_csv("i l/r qword_occupied", NUMBER_OF_QWORD_OCCUPIED)
-        append_csv("i l/r aligned64_bits_to_use", ALIGNED64_BITS_TO_USE)
-        append_csv("i l/r current_bit_used", current_bit_used)
-        append_csv("i l/r current_indice_index", current_bit_used / 0x40)
-        append_csv("i l/r remaining_bits", remaining_bit_mask)
-        carry_over := !transmute(b64)(((current_bit_used + bits_to_use) / QWORD_BIT_SIZE) - ((current_bit_used + ALIGNED64_BITS_TO_USE) / QWORD_BIT_SIZE))
-        append_csv("i l/r is_bits_carried_over", QWORD(carry_over))
-        append_csv("i o/w target_bit_used", world.indices[0x00])
-        append_csv("i o/w target_indice_index", world.indices[0x00] / 0x40)
-        append_csv("i o/w indice", (bits_to_use * 0x100000000) | (current_bit_used - 0x40))
-
-
-    }
+    COMMIT_GRANULARITY :: PHYSICAL_CORE_COUNT * CACHE_LINE
     
-	return (bits_to_use * 0x100000000) | (current_bit_used - 0x40)
-}
+    committed_data_bytes := ((columnar.data_size * commit_count) + (COMMIT_GRANULARITY - 1)) / COMMIT_GRANULARITY * COMMIT_GRANULARITY
 
-@(optimization_mode="favor_size")
-bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [$N]QWORD) #no_bounds_check {
+    //if not_the_owning_thread_for_the_world{
+    //    sync_block for write
 
-    data_storage : ^DataStorage = ---
-    blob_identifier_ptr : [^]QWORD = ---
+    //    write to the deferred structual command buffer
+
+
+    //    return
+    //}
     
-    data_storage = &world.data_storage[storage_index]
-    blob_identifier_ptr = transmute([^]QWORD)(uintptr(data_storage.blob) + uintptr(data_storage.current_bytes_offset))
-    
-    //i < indices_count
-    for i : QWORD = 0; transmute(b64)(i - N); i+=1{
-        current_indice : QWORD = ---
 
-        current_indice = indices[i]
+    if committed_data_bytes < columnar.reserved_data_bytes {
 
-        //i * 2
-        blob_identifier_ptr[0x00] = QWORD(DWORD(current_indice))
-        blob_identifier_ptr[0x01] = QWORD(current_indice / 0x100000000)
-
-        blob_identifier_ptr = transmute([^]QWORD)(uintptr(blob_identifier_ptr) + 0x10)
-    }
-
-    data_storage.current_bytes_offset += (N * 0x10)
-
-
-    when ODIN_DEBUG && DUMP{
-
-        append_csv("b i/r world_address", QWORD(uintptr(world)))
-        append_csv("b i/r storage_index", storage_index)
-        for i in 0..<N{
-            append_csv("b i/r indices_array", indices[i])
-            append_csv("b o/r current_bit_used_indices", QWORD(DWORD(indices[i])))
-            append_csv("b o/r current_bit_to_use_indices", QWORD(indices[i] / 0x100000000))
-        }
-
-        append_csv("b l/rw blob", QWORD(uintptr(data_storage.blob)))
-        append_csv("b l/rw end blob", QWORD(uintptr(blob_identifier_ptr)))
-        append_csv("b l/rw data_storage_address", QWORD(uintptr(data_storage)))
-        append_csv("b o/rw previous_data_storage_current_byte_offset", data_storage.current_bytes_offset - (N * 0x10))
-        append_csv("b o/rw data_storage_current_byte_offset", data_storage.current_bytes_offset)
+        //TODO:khal sync lock and than do operation below. We than append command buffer so chunk can be rebuilt on the main thread.
+        
+        columnar.allocated_data_bytes += committed_data_bytes
+        columnar.data_bytes_per_core +=  (committed_data_bytes / PHYSICAL_CORE_COUNT)
+        columnar.reserved_data_bytes -= committed_data_bytes
+        columnar.reserved_data_bytes_per_core -= (committed_data_bytes / PHYSICAL_CORE_COUNT)
+        columnar.end += commit_count
     }
 }
+
+//TODO:Khal any runtime changes in the columnar metadata will require synchronization between threads.
+sync :: proc(){
+
+
+
+}
+
+//0..53, 53..73, 73..92, 92..160
+indices_intersect_blob :: proc(){
+    
+}
+
+
+query :: proc(){
+
+
+
+}
+
+
+//TODO:Khal if we pass the responsiblity to the user to reuse the indice/s than we need to create a proc that get all the data that the indice has.
+//This will be done in bulk. This will do no structual change and should be thread safe, since we are reading from the indices section.
+
+
+//Paralllel loop implementation?????????
+
 
  //Used for testing. Remove when fully implemented.
  main :: proc(){
@@ -486,12 +551,13 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
      HEALTH_STORAGE_INDEX :: 0
      NPC_POSITION_STORAGE_INDEX :: 1
      ENEMY_POSITION_STORAGE_INDEX :: 2
-     PROP_STORAGE_INDEX :: 7
+     PROP_STORAGE_INDEX :: 4
 
      PropData :: struct{
          foo : QWORD,
          bar : DWORD,
          baz : DWORD,
+         t : DWORD,
      }
      
 	 Health :: struct{
@@ -504,49 +570,16 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
      }
 
 
-     world : World = ---
+ 	 world : World(1,4) = ---
+
+     //Create a world with 24 columnar page where each columnar page is a single page size
+     init_world(&world, 24)
+
+          
+     //Register (NPC) Position "component" in the world. 
+     //register_columnar(world, Position, NPC_POSITION_STORAGE_INDEX, 200)
 
      
-	 world = create_world(900, 30)
-     world = create_world(100,57)
-     world = create_world(575, 123)
-     world = create_world(236, 353)
-     world = create_world(345, 512)
-     world = create_world(1, 2)
-     world = create_world(53, 24)
-     world = create_world(999, 1)
-     world = create_world(1, 999)
-     
-     /*
-     //Register Health "component" in the world. (max of 100 "entities")
-	 register_data_storage(&world, Health, HEALTH_STORAGE_INDEX, 100)
-
-     //Register (NPC) Position "component" in the world. (max of 200 "entities")
-     register_data_storage(&world, Position, NPC_POSITION_STORAGE_INDEX, 200)
-
-     //prop data
-     register_data_storage(&world, PropData, PROP_STORAGE_INDEX, 123)
-     
-     //Register (Enemy) Position "component" in the world. (max of 300 "entities")
-     register_data_storage(&world, Position, ENEMY_POSITION_STORAGE_INDEX, 300)
-
-     props := create_indices(&world, 53)
-     //Create 20 "entities"
-	 enemies := create_indices(&world, 20)
-     //Create 50 "entities"
-	 npc := create_indices(&world, 50)
-     npc_merchant := create_indices(&world, 37)
-
-     bind_indices_to_data(&world, PROP_STORAGE_INDEX, [1]QWORD{props})
-     bind_indices_to_data(&world, HEALTH_STORAGE_INDEX, [2]QWORD{enemies, npc})
-     bind_indices_to_data(&world, NPC_POSITION_STORAGE_INDEX, [1]QWORD{npc})
-     bind_indices_to_data(&world, ENEMY_POSITION_STORAGE_INDEX, [1]QWORD{enemies})
-     bind_indices_to_data(&world, NPC_POSITION_STORAGE_INDEX, [1]QWORD{npc_merchant})
-     bind_indices_to_data(&world, HEALTH_STORAGE_INDEX, [1]QWORD{npc_merchant})
-     */
-     
-     
-
      when ODIN_DEBUG && DUMP{
 
          dump_csv_to_file("/home/khalid/Documents/GitHub/Journey_ECS/dump.csv")
@@ -554,20 +587,20 @@ bind_indices_to_data :: proc(world : ^World, $storage_index : QWORD, indices : [
      }
 
 
+     //Maybe add a free list to handle "remove" indices from the blob.
      
+
      //TODO:Khal Procedure to work on:
-     //release_indices_from_data (this will be slow), since we will assume it will rarely be called at runtime.
+     //Remove
      //Get identifier with datas
      //get identifier from data
      //Has data?
      //Get Data bulk?
      //Set Data bulk?
      //Get All Data?
-     //Removing individual Data will be really slow
-     //Removing bulk data will be faster.
-     //Fetch Alive entities
      //Query
      //Run
      //Recylce "entity" (Way later... or possible no implemented)
+     //defrag indices
     
  }
