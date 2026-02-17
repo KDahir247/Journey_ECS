@@ -4,19 +4,19 @@ desc: LL cache:         33554432 B, 64 B, 16-way associative
 cmd: /home/khalid/Documents/GitHub/Journey_ECS/main-debug.bin
 events: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw Bc Bcm Bi Bim
 fl=/home/khalid/Documents/GitHub/Journey_ECS/journey_ecs.odin
-fn=journey::init_world:proc(world:^journey::World($PAGE_COUNT=1, $THREAD_COUNT=4),unique_data_capacity:$$24)
-393 3 0 0 0 0 0 1 0 0 0 0 0 0
-403 3 0 0 2 0 0 1 0 0 0 0 0 0
-404 4 1 1 2 0 0 1 0 0 0 0 0 0
-407 7 0 0 2 0 0 2 0 0 0 0 0 0
-415 14 1 1 2 0 0 2 0 0 0 0 0 0
-425 14 1 1 2 0 0 2 0 0 0 0 0 0
-436 1 0 0 1 0 0 0 0 0 0 0 0 0
-576 10 1 1 1 0 0 2 0 0 0 0 0 0
+fn=journey::init_world:proc(world:^journey::World($PAGE_COUNT=5, $THREAD_COUNT=4),unique_data_capacity:$$1)
+367 3 0 0 0 0 0 1 0 0 0 0 0 0
+377 3 0 0 2 0 0 1 0 0 0 0 0 0
+378 4 1 1 2 0 0 1 0 0 0 0 0 0
+391 7 0 0 2 0 0 2 0 0 0 0 0 0
+397 14 1 1 2 0 0 2 0 0 0 0 0 0
+407 14 1 1 2 0 0 2 0 0 0 0 0 0
+438 1 0 0 1 0 0 0 0 0 0 0 0 0
+584 10 1 1 1 0 0 2 0 0 0 0 0 0
 fn=journey::main
-549 6 0 0 1 0 0 2 0 0 0 0 0 0
-576 2 0 0 0 0 0 1 0 0 0 0 0 0
-606 3 0 0 2 0 0 0 0 0 0 0 0 0
+557 6 1 1 1 0 0 2 0 0 0 0 0 0
+584 2 0 0 0 0 0 1 0 0 0 0 0 0
+612 3 0 0 2 0 0 0 0 0 0 0 0 0
 fl=/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/include/emmintrin.h
 fn=strcspn
 707 1 0 0 0 0 0 0 0 0 0 0 0 0
@@ -34,14 +34,14 @@ fl=/usr/share/Odin/base/runtime/core.odin
 fn=runtime::[core.odin]::__init_context
 714 6 1 1 2 0 0 4 0 0 0 0 0 0
 715 10 0 0 0 0 0 0 0 0 2 2 0 0
-720 6 1 1 2 0 0 2 0 0 0 0 0 0
-721 4 0 0 2 0 0 2 0 0 0 0 0 0
+720 6 0 0 2 0 0 2 0 0 0 0 0 0
+721 4 1 1 2 0 0 2 0 0 0 0 0 0
 723 6 0 0 2 0 0 2 0 0 0 0 0 0
-725 10 1 1 4 0 0 2 0 0 0 0 0 0
-729 6 0 0 2 0 0 2 0 0 0 0 0 0
+725 10 0 0 4 0 0 2 0 0 0 0 0 0
+729 6 1 1 2 0 0 2 0 0 0 0 0 0
 732 6 0 0 2 0 0 2 0 0 0 0 0 0
 733 4 0 0 2 0 0 2 0 0 0 0 0 0
-735 6 1 1 2 0 0 2 0 0 0 0 0 0
+735 6 0 0 2 0 0 2 0 0 0 0 0 0
 736 4 0 0 2 0 0 2 0 0 0 0 0 0
 737 2 0 0 2 0 0 0 0 0 0 0 0 0
 fn=runtime::default_context
@@ -51,10 +51,10 @@ fn=runtime::default_context
 701 6 0 0 2 0 0 1 0 0 0 0 0 0
 fl=/usr/share/Odin/base/runtime/default_temp_allocator_arena.odin
 fn=runtime::arena_destroy
-169 6 2 2 1 0 0 4 0 0 0 0 0 0
-170 6 0 0 2 0 0 0 0 0 1 1 0 0
+169 6 1 1 1 0 0 4 0 0 0 0 0 0
+170 6 1 1 2 0 0 0 0 0 1 1 0 0
 177 2 1 1 1 0 0 1 0 0 0 0 0 0
-178 2 1 1 1 0 0 1 0 0 0 0 0 0
+178 2 0 0 1 0 0 1 0 0 0 0 0 0
 179 2 0 0 1 0 0 0 0 0 0 0 0 0
 fl=/usr/share/Odin/base/runtime/default_temporary_allocator.odin
 fn=runtime::[default_temporary_allocator.odin]::_destroy_temp_allocator_fini
@@ -65,18 +65,18 @@ fn=runtime::[default_temporary_allocator.odin]::_destroy_temp_allocator_fini
 fn=runtime::default_temp_allocator_destroy
 0 1 0 0 1 0 0 0 0 0 0 0 0 0
 31 5 1 1 1 0 0 3 0 0 0 0 0 0
-32 5 1 1 0 0 0 0 0 0 1 0 0 0
-33 4 0 0 2 0 0 1 0 0 0 0 0 0
+32 5 0 0 0 0 0 0 0 0 1 0 0 0
+33 4 1 1 2 0 0 1 0 0 0 0 0 0
 34 3 0 0 0 0 0 1 0 0 0 0 0 0
 36 2 0 0 1 0 0 0 0 0 0 0 0 0
 fl=/usr/share/Odin/base/runtime/entry_unix.odin
 fn=main
 53 7 2 2 2 0 0 4 1 0 0 0 0 0
-54 20 2 2 5 0 0 7 1 1 0 0 0 0
-55 26 2 2 7 0 0 11 0 0 0 0 0 0
+54 20 1 1 5 0 0 7 1 1 0 0 0 0
+55 26 3 3 7 0 0 11 0 0 0 0 0 0
 56 2 0 0 0 0 0 1 0 0 0 0 0 0
 57 2 0 0 0 0 0 1 0 0 0 0 0 0
-58 2 1 1 0 0 0 1 0 0 0 0 0 0
+58 2 0 0 0 0 0 1 0 0 0 0 0 0
 59 3 0 0 1 0 0 0 0 0 0 0 0 0
 fl=/usr/share/Odin/base/runtime/error_checks.odin
 fn=runtime::multi_pointer_slice_expr_error
@@ -1269,7 +1269,7 @@ fn=_dl_call_libc_early_init
 41 2 0 0 1 0 0 0 0 0 0 0 0 0
 fl=/usr/src/debug/glibc/glibc/elf/dl-call_fini.c
 fn=_dl_call_fini
-24 25 1 0 0 0 0 15 0 0 0 0 0 0
+24 25 0 0 0 0 0 15 0 0 0 0 0 0
 28 10 1 1 5 0 0 0 0 0 5 0 0 0
 32 5 0 0 5 0 0 0 0 0 0 0 0 0
 34 5 0 0 5 0 0 0 0 0 0 0 0 0
@@ -3032,7 +3032,7 @@ fn=check_stdfiles_vtables
 545 1 0 0 0 0 0 0 0 0 0 0 0 0
 546 4 1 1 2 2 0 0 0 0 1 1 0 0
 547 3 0 0 2 1 0 0 0 0 1 0 0 0
-548 3 1 1 2 1 0 0 0 0 1 1 0 0
+548 3 1 1 2 1 0 0 0 0 1 0 0 0
 550 1 0 0 1 0 0 0 0 0 0 0 0 0
 fl=/usr/src/debug/glibc/glibc/malloc/../sysdeps/unix/sysv/linux/not-cancel.h
 fn=__ptmalloc_init
@@ -3599,11 +3599,11 @@ fl=???
 fn=(below main)
 0 12 2 2 2 0 0 3 0 0 0 0 1 1
 fn=???
-0 155 23 20 43 5 0 18 1 1 15 9 11 8
+0 155 23 21 43 5 0 18 1 1 15 9 11 8
 fn=__$cleanup_runtime
 0 7 0 0 3 0 0 3 0 0 0 0 0 0
 fn=__$startup_runtime
-0 2 1 1 1 0 0 0 0 0 0 0 0 0
+0 2 0 0 1 0 0 0 0 0 0 0 0 0
 fn=__memcpy_avx_unaligned_erms
 0 22 3 3 6 0 0 4 0 0 5 2 0 0
 fn=__memset_avx2_unaligned_erms
@@ -3611,7 +3611,7 @@ fn=__memset_avx2_unaligned_erms
 fn=__sigsetjmp
 0 166 5 5 35 1 0 62 2 2 1 1 0 0
 fn=__strrchr_avx2
-0 29 5 5 3 1 0 0 0 0 4 3 0 0
+0 34 4 4 4 2 0 0 0 0 5 2 0 0
 fn=_dl_runtime_resolve_xsave
 0 82 4 4 96 1 0 100 3 0 0 0 2 2
 fn=_setjmp
@@ -3642,4 +3642,4 @@ fn=strlen
 0 376 3 3 53 3 3 0 0 0 53 11 0 0
 fn=strncmp
 0 69 3 3 11 1 1 0 0 0 12 4 0 0
-summary: 166501 1160 1139 42318 1612 1275 15480 433 395 29792 3531 326 157
+summary: 166506 1155 1136 42319 1613 1275 15480 433 395 29793 3529 326 157

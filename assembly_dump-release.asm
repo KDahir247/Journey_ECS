@@ -1259,7 +1259,7 @@ Disassembly of section .text:
   402106:	c5 f8 77             	vzeroupper
   402109:	e8 12 f2 ff ff       	call   401320 <__$startup_runtime>
   40210e:	b8 09 00 00 00       	mov    $0x9,%eax
-  402113:	be 00 90 01 00       	mov    $0x19000,%esi
+  402113:	be 00 60 00 00       	mov    $0x6000,%esi
   402118:	ba 03 00 00 00       	mov    $0x3,%edx
   40211d:	41 ba 21 00 00 00    	mov    $0x21,%r10d
   402123:	31 ff                	xor    %edi,%edi
@@ -1269,12 +1269,12 @@ Disassembly of section .text:
   402131:	b8 ba 00 00 00       	mov    $0xba,%eax
   402136:	0f 05                	syscall
   402138:	b8 09 00 00 00       	mov    $0x9,%eax
-  40213d:	be 00 00 02 00       	mov    $0x20000,%esi
+  40213d:	be 00 10 00 00       	mov    $0x1000,%esi
   402142:	31 ff                	xor    %edi,%edi
   402144:	45 31 c9             	xor    %r9d,%r9d
   402147:	0f 05                	syscall
   402149:	b8 09 00 00 00       	mov    $0x9,%eax
-  40214e:	be 00 00 04 00       	mov    $0x40000,%esi
+  40214e:	be 00 00 02 00       	mov    $0x20000,%esi
   402153:	31 ff                	xor    %edi,%edi
   402155:	45 31 c9             	xor    %r9d,%r9d
   402158:	0f 05                	syscall

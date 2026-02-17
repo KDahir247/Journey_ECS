@@ -7,46 +7,31 @@ import "core:sys/linux"
 //Debug use
 import "core:fmt"
 import "core:strings"
-
+import "base:runtime"
 /*
    What is the problem (informal):
-   We want to figure out a way to organize entity's components in a way where it is possible to always read/write from a full cache line and use all of it.
+   - We want to figure out a way to organize entity's components in a way where it is possible to always read/write from a full cache line and use all of it.
    In most cases we only use only a small subset of data (not reading from all field in a struct) and the rest is wasted. We want the end user to think
-   about the notion that there is data, which in this case is the component and there is a transform, which is the system and just optimize that.
-   Rather than think that each entity is an Object and than operate each object differently (which is easier to reason about) and thus causing waste in most cases. We want a easy way for 
+   about the notion that there is data, which in this case is the component and there is a transform, which is the system and just optimize that. 
+
+   - Rather than think that each entity is an Object and than operate each object differently (which is easier to reason about) and thus causing waste in most cases. We want a easy way for 
    user to use the notion of data and transform. Something that doesn't cause high friction in thier project and still reap the optimization benefits.
-   The problem this library is trying to solve is to organize the data in a way there the end user just query all the data it needs and write the transfom and it is done.
-
-   Input:
-   Component
-   Register: World, Data_Type, Int
-   Store: World, Entities, Data_Type_Identifiers
-   Remove: Word, Entities, Data_Type_Identifiers
-   Query: Word, Data_Types
+   The problem this library is trying to solve is to organize the data in a way there the end user just query all the data it needs and write the transfom and it is done. 
+ 
+   - We want to make the implementation by default thread safe when the user implement the system. This doesn't really mean excessive locking or syncing like how typical games or games engine are done. We want to create a way to avoid all that 
+   when possible, 
 
 
-   Entity
-   Add: World, Int
-   Remove: World, Int_Collection
-
-   Output:
-   Component
-   Register: Data_Type_Identifiers
-   Store: Nothing
-   Remove: Nothing
-   Query: Query
+Design:
    
-   Entity
-   Add: Int_Collection
-   Remove: Nothing
+   Queries will be by specific indices that are specificed by the user when calling register_components, If we query by typeid it will not distingush the different interpreted Position data types.
+   (using position as an example) It will fetch all the Position data, which is not what we really want. The interperation of the data is up to the user. They may specify a Position != Position
+   if the user interprets the data differently (example Player Position, Decal Position) or a data can indeed be Position == Position depending on the user interperation.
 
-
-   Design:
-   
-   Queries will be by specific indices that are returned when calling register_components, If we query by typeid it will not distingush the different interpreted Position data types.
-   (using position as an example) It will fetch all the Position data, which is not what we want. The interperation of the data is up to the user. They may specify a Position != Position
-   if the user interprets the data differently (example Player Position, Decal Position) or a data can indeed be Position == Position.
-
+   Data will be stored in a ColumnarPage which is a multiple of page sizes. Within a ColumnarPage there is a global metadata for all the LogicalPage. The LogicalPage contains a bit_mask which is used to zero out component that 
+   has no "entity" assign to it or if the "entity" is deleted (there is actually no representation of entity in our implementation) 
+   So for example the system will still do the logic for a deleted entity component let say we move the entity with Position, so even though the data doesn't contain a mapping to an entity or it is deleted it will still do the logic 
+   but on the final pass of the system it will do a AND operator with the zero_bit_mask which will zero out the data for the component with no entity. Exactly like SIMD MASKING
    --------------------------------------------------------------------------------------------
    Limitation:
 
@@ -59,14 +44,15 @@ import "core:strings"
 
    Removing and adding data while transforming the data is undefined behaviour and may cause a crash.
 
-   The library will handle data in bulk, so single changes will be slower
-   eg CreateEntities(&world, 60) will be faster than CreateEntities(&world, 1)
+   The library will handle data in bulk, so single changes will be slower 
 
    The data can only be struct
 
    Header data and meta data maybe stored in memory to avoid using generic in this library.
 
-   No notion of events (hooks, observer, observable, etc...) buitin the library (don't see this as a weakness)
+   No notion of events (hooks, observer, observable, etc...) buitin the library (don't see this as a weakness) 
+ 
+   Each LogicalPage can hold at maximum 1024 "entites", so if more "entities" are required create more LogicalPage for the specific ColumnarPage
    --------------------------------------------------------------------------------------------
    Constraint:
    
@@ -76,8 +62,6 @@ import "core:strings"
    
    There will be no resources. This will be up to the user
 
-   It is best not to do any data structure changes in the transform. (Adding/Removing data)
-
    There will not be any dependency on the data. The user can create depenency of the data if they want in the transform (if statement).
 
    majority of the procedure of this library will be done in bulk
@@ -85,14 +69,13 @@ import "core:strings"
    The library will not a builtin component events (such as on value change, on component added, on component removed, etc....). This will force
    the user to pay higher memory usage and performance even though they may not use it. The end user can implement it over the library if needed. 
 
-   There will not be deleting data or indices after we bind it to a blob. We may reuse it (free list), but there will be no structural changes after binding to the blob. 
-   Except for querying and grouping. This will not happen every frame rather it will happen in the initialization. 
+   There will not be deleting data or indices after we bind it to a columnarPage. We may reuse it (free list), but there will be no structural changes after binding to the ColumnarPage.  
  
-   Deleting data or removing data will be implemented by the user on top of this 
-   For example the may hold a free list for each type of data and indices that need to be reused because of world streaming. If dealing with
-   multiple thread than the can hold a free list per thread for each chunk which will hold the reusable when in this case doing world streaming.
-   In other words composition over this primitive implementation to cater their use case.
---------------------------------------------------------------------------------------------
+   Deleting data or removing data will be implemented by using a Deferred Operation Buffer and a Sync point. All deferred operation will be done on the main thread and no other threads 
+   deferred operations on other threads instead of the main thread will cause some undefined behaviour. 
+
+   Querying and Grouping will be very fast and will use alot of assumption, so reordering the data in the ColumnarPage will break it and break the logic
+   --------------------------------------------------------------------------------------------
    Assumption:
 
    The library will assume each data is unique for example you can register more than on Position. The interpretation of the data is up to the user not the library.
@@ -106,9 +89,9 @@ import "core:strings"
    We will assume that the each unique data will be stored in homogenous collection.
 
    We will assume that manipulating the organization of the data will happen less frequently than the actual system.
-   eg. Adding, Querying the data will happen less frequently than transforming the data. Removing the data will never happen in this implementation
-   Reusing data may happen but the implementation is up to the user and should not cause structural change.
+   eg. Adding, Querying the data will happen less frequently than transforming the data. 
 
+  We will assume that there will be no structual change at all in the implementation
 --------------------------------------------------------------------------------------------
    Goals:
 
@@ -155,12 +138,14 @@ ZMM_BYTES :: 64
 
 
  DUMP :: #config(CSV_DUMP, false)
+
  LOGICAL_CORE_COUNT :: #config(CORE, 8)
  PHYSICAL_CORE_COUNT :: LOGICAL_CORE_COUNT / 2
 
 
+//TODO:Khal we need to incorperate a way to make each new procedure call go in a new row, currently it just add to the column 
 when ODIN_DEBUG && DUMP{
-
+    
     //We don't care about perf here. We are using this for dumping.
     
     CSVColumn ::struct{
@@ -181,7 +166,6 @@ when ODIN_DEBUG && DUMP{
     setup_csv :: proc(){
         csv_global.cols = make([]CSVColumn, 64)
         csv_global.index = make_map(map[string]QWORD)
-
      }
 
     append_csv :: proc($header : string, data : QWORD){
@@ -202,21 +186,17 @@ when ODIN_DEBUG && DUMP{
         }
 
         runtime.append_elem(&csv_global.cols[index].data, data)
-
-
     }
-
     dump_csv_to_file :: proc($path : cstring){
         
         max_data_length := 0
 
         builder := strings.builder_make()
-
         
         for index in 0..=csv_global.highest{
+                     
             if index < csv_global.highest{
                 strings.write_string(&builder, csv_global.cols[index].header)
-
                 strings.write_string(&builder, ", ")
             }else{
                 strings.write_string(&builder, csv_global.cols[index].header)
@@ -263,24 +243,24 @@ when ODIN_DEBUG && DUMP{
     }
 }
 
-PageThreadAccess :: enum{
+PageThreadAccess :: enum u8{
     ThreadLocal,
     ThreadReadonly,
     ThreadReadWrite,
 }
 
-PageStructuralOperation :: enum{
+PageStructuralOperation :: enum u8{
     StructuralChange,
     NoStructuralChange,
 }
 
-PageDataAccess :: enum{
+PageDataAccess :: enum u8{
     InputOutput,
     Input,
     Output,
 }
 
-PageMode :: enum{
+PageMode :: enum u8{
     SIMD8,
     SIMD4,
     MASK8,
@@ -297,10 +277,10 @@ StructuralOperation :: enum u8{
 
 
 World :: struct($PAGE_COUNT : QWORD, $THREAD_COUNT : QWORD) #align(64){
-    header : [^]TableHeader,
+    header : [^]ColumnarHeader,
     columnar_table : [^]ColumnarPage(PAGE_COUNT),
     owner_thread_id : QWORD,
-    ds_ops : [^]DSOperation,
+    ds_ops : [^]StructuralOperation,
     dso_buffer : [^]BYTE,
     //TODO:Khal structure layout is not done yet.
     free_list : [^]FreeList,
@@ -310,6 +290,7 @@ World :: struct($PAGE_COUNT : QWORD, $THREAD_COUNT : QWORD) #align(64){
     sync_point : [4]AtomicSynchronization,
 }
 
+//The size of the Op structs can not be greater than 32 bytes
 PushOp :: struct{
     //implement me
 }
@@ -327,44 +308,29 @@ ShrinkOp :: struct{
     //implement me
 }
 
-//TODO:Khal we might shrink this to be 4 byte struct (each enum is u8)
-TableHeader :: struct{
+ColumnarHeader :: struct{
+    allocated_data_bytes : QWORD,
+    reserved_data_bytes : QWORD,
+    
+    data_size : DWORD,
+    start_indices : DWORD,
+    end_indices : DWORD,
+
     thread_access : PageThreadAccess,
     structural_op : PageStructuralOperation,
     data_access : PageDataAccess,
     page_mode : PageMode,
 }
 
+
 FreeList :: struct{
     temp : QWORD,
     //implement me
 }
 
-
-ColumnarHeader :: struct #align(64){
-    allocated_data_bytes : QWORD,
-    data_bytes_per_core : QWORD,
-    reserved_data_bytes : QWORD,
-    reserved_data_bytes_per_core : QWORD,
-    data_size : QWORD,
-    data_alignment : QWORD,
-    start_indices : QWORD,
-    end_indices : QWORD,
-}
-
-
 ColumnarPage :: struct($PAGE_COUNT: QWORD){
-    header : ColumnarHeader,
-    //used too zero out payload data for unused "entity" (eg. when "entity is dead the bit_zero_mask specific position is set to zero" than the bit_zero_mask is converted to a simd mask to mask out the deleted entities payload
-    bit_zero_mask : [PAGE_COUNT * 128]BYTE,
-    payload : [(PAGE_COUNT * 3904) + ((PAGE_COUNT - 1) * size_of(ColumnarHeader))]BYTE
-}
-
-
-//To get the base we need (65536 * thread_id + per_thread_cursor)
-DSOperation :: struct{
-    op : StructuralOperation,
-    thread_id : u8, 
+    bit_zero_mask : [16 * PAGE_COUNT]QWORD,
+    payload : [3968 * PAGE_COUNT]BYTE,
 }
 
 
@@ -373,27 +339,35 @@ AtomicSynchronization :: struct #align(64){
     //TODO:Khal add sync metadata if needed
 }
 
-//Happy
+
 @(optimization_mode="favor_size") 
 init_world :: proc (world : ^World($page_count, $thread_count), $unique_data_capacity : QWORD)
-where page_count > 0 && thread_count <= 4 #no_bounds_check{
+where page_count > 0 && thread_count <= 4 {
+
+    when ODIN_DEBUG && DUMP{
+         dump_vec : []QWORD = make_slice([]QWORD, 100)
+         append_csv("World address input w", QWORD(uintptr(world)))
+         append_csv("page_count constant r", QWORD(page_count))
+         append_csv("thread_count constant r", QWORD(thread_count))
+         append_csv("unique_data_count constant r", QWORD(unique_data_capacity))
+
+     }
 
     {
         buffer_address : uintptr = ---
 
-        HEADER :: TableHeader
+        HEADER :: ColumnarHeader
         COLUMNAR :: ColumnarPage(page_count)
 
-        TOTAL_COLUMNAR_BYTES :: size_of(COLUMNAR) * unique_data_capacity
+        REQUIRED_COLUMNAR_BYTES :: size_of(COLUMNAR) * unique_data_capacity
+        REQUIRED_HEADER_BYTES :: (size_of(HEADER) * unique_data_capacity + 0xFFF) & 0xFFFFFFFFFFFFF000
 
-        TOTAL_HEADER_SIZE :: (size_of(TableHeader) * unique_data_capacity + 0xFFF) & 0xFFFFFFFFFFFFF000
-
-        TOTAL_SIZE :: TOTAL_COLUMNAR_BYTES + TOTAL_HEADER_SIZE
+        REQUIRED_TOTAL_BYTES :: REQUIRED_COLUMNAR_BYTES + REQUIRED_HEADER_BYTES
 
         buffer_address = intrinsics.syscall(
             linux.SYS_mmap,
             0x00,
-            uintptr(TOTAL_SIZE),
+            uintptr(REQUIRED_TOTAL_BYTES),
             uintptr(0x03),
             uintptr(0x21),
             ~uintptr(0),
@@ -401,56 +375,96 @@ where page_count > 0 && thread_count <= 4 #no_bounds_check{
         )
 
         world.header = cast(^HEADER)(buffer_address)
-        world.columnar_table = cast([^]COLUMNAR)(buffer_address + uintptr(TOTAL_HEADER_SIZE))
+        world.columnar_table = cast([^]COLUMNAR)(buffer_address + uintptr(REQUIRED_HEADER_BYTES))
+
+        when ODIN_DEBUG && DUMP{
+            append_csv("total_columnar_bytes local r", REQUIRED_COLUMNAR_BYTES)
+            append_csv("total_header_bytes local w", REQUIRED_HEADER_BYTES)
+            append_csv("total_size local w", REQUIRED_TOTAL_BYTES)
+            append_csv("buffer_address local w", QWORD(uintptr(buffer_address)))
+            append_csv("world_header_address input w", QWORD(uintptr(world.header)))
+            append_csv("world_columnar_table input w", QWORD(uintptr(world.columnar_table)))
+        }
+        
     }
 
     world.owner_thread_id = QWORD(intrinsics.syscall(linux.SYS_gettid))
     
     {
-        DEFAULT_DS_SIZE :: 65536
-      
-        TOTAL_DS_OP_SIZE :: (DEFAULT_DS_SIZE * thread_count / 2 + 0xFFF) & 0xFFFFFFFFFFFFF000
-        TOTAL_DS_BUFFER_SIZE :: (DEFAULT_DS_SIZE * thread_count + 0xFFF) & 0xFFFFFFFFFFFFF000
-        
-        world.ds_ops = cast([^]DSOperation)intrinsics.syscall(
+        REQUIRED_DS_OP_BYTES :: 4096 //assuming the op enum to be 1 byte so we can issue 4096
+        REQUIRED_DS_BUFFER_BYTES :: 131072 //assuming limit of op struct to be 32 byte so (131072 / 32) is 4096, so we can issue 4096 
+         
+        world.ds_ops = cast([^]StructuralOperation)intrinsics.syscall(
             linux.SYS_mmap,
             0x00,
-            uintptr(TOTAL_DS_OP_SIZE),
+            uintptr(REQUIRED_DS_OP_BYTES),
             uintptr(0x03),
             uintptr(0x21),
             ~uintptr(0),
             uintptr(0),
-        )       
-
+        )
+        
         world.dso_buffer = cast([^]BYTE)intrinsics.syscall(
             linux.SYS_mmap,
             0x00,
-            uintptr(TOTAL_DS_BUFFER_SIZE),
+            uintptr(REQUIRED_DS_BUFFER_BYTES),
             uintptr(0x03),
             uintptr(0x21),
             ~uintptr(0),
             uintptr(0),
-        )         
+        )
+
+        when ODIN_DEBUG && DUMP{
+            append_csv("ds_op_bytes constant r", QWORD(REQUIRED_DS_OP_BYTES))
+            append_csv("ds_buffer_bytes constant r", QWORD(REQUIRED_DS_BUFFER_BYTES))
+            
+            append_csv("world_ds_ops_address input w", QWORD(uintptr(world.ds_ops)))
+            append_csv("world_ds_buffer_address input w", QWORD(uintptr(world.dso_buffer)))
+        }
     }
 
+    //TODO:Khal add FreeList initialization
+    {
+
+
+
+
+
+    }
+
+    when ODIN_DEBUG && DUMP{
+        append_csv("world_owner_thread_id input w", QWORD(world.owner_thread_id))
+    }
  }
 
 
 //TODO:Khal we need to reimplement this
 @(optimization_mode="favor_size", enable_target_feature="avx,avx2")
-register_columnar :: proc(world : ^World($page_count, $thread_count), $data_typeid : typeid, $table_index : QWORD, $lane_count : QWORD, $start : QWORD, $end : QWORD)
-	where intrinsics.type_is_struct(data_typeid) && end > start &&  (lane_count & 0x01) == 0 && page_count > 0 && thread_count <= 4{
+register_columnar :: proc(world : ^World($page_count, $thread_count), $data_typeid : typeid, $table_index : QWORD, $start : QWORD, $end : QWORD)
+	where intrinsics.type_is_struct(data_typeid) && end > start &&  page_count > 0 && thread_count <= 4{
 
         //We are still only using 24 bytes in the world.
         {
+            when align_of(data_typeid) == 8{
+                LANE_COUNT :: 4
+            }else when align_of(data_typeid) > 8 || align_of(data_typeid) < 4{
+                LANE_COUNT :: 1
+            }else when align_of(data_typeid) == 4{
+                LANE_COUNT :: 8
+            }
+            
             //TODO:Khal make the naming generic. Remove Data
             INDICES_CAPACITY :: end - start
-            WORKING_CHUNK :: (INDICES_CAPACITY + lane_count - 0x01) / lane_count
-            EVEN_WORKING_CHUNK :: (WORKING_CHUNK + PHYSICAL_CORE_COUNT - 1) / PHYSICAL_CORE_COUNT * PHYSICAL_CORE_COUNT
-            DATA_NEEDED_RAW_BYTES :: size_of(#soa[lane_count]data_typeid) * EVEN_WORKING_CHUNK
-            ALIGN_CACHE_DATA_RAW_BYTES :: (DATA_NEEDED_RAW_BYTES + 0x3F) & 0xFFFFFFFFFFFFFFC0
+
+            //TODO:Khal rename everthing and check everthing
+            ROUND_UP_SIMD_INDICES_CAPACITY :: (INDICES_CAPACITY + LANE_COUNT - 0x01) / LANE_COUNT * LANE_COUNT
+            REQUIRED_SOA_AOS_DATA_BYTES :: size_of(#soa[lane_count]data_typeid) * ROUND_UP_SIMD_INDICES_CAPACITY
+
+
+            //TODO:Khal we need to double check and rename
+            ALIGN_CACHE_DATA_RAW_BYTES :: (REQUIRED_SOA_AOS_DATA_BYTES + 0x3F) & 0xFFFFFFFFFFFFFFC0
             OCCUPIED_CACHE_LINE :: ALIGN_CACHE_DATA_RAW_BYTES / 0x40
-            EVEN_CACHE_LINE :: (OCCUPIED_CACHE_LINE + PHYSICAL_CORE_COUNT - 1) / PHYSICAL_CORE_COUNT * PHYSICAL_CORE_COUNT
+            EVEN_CACHE_LINE :: (OCCUPIED_CACHE_LINE + thread_count - 1) / thread_count * thread_count
             TARGET_DATA_RAW_BYTES :: EVEN_CACHE_LINE * 0x40
 
             //Bottleneck on pagefault.
@@ -458,8 +472,8 @@ register_columnar :: proc(world : ^World($page_count, $thread_count), $data_type
             world.columnar_table[table_index].header = {
                 TARGET_DATA_RAW_BYTES,
                 TARGET_DATA_RAW_BYTES / PHYSICAL_CORE_COUNT,
-                (PAYLOAD_SIZE * QWORD(PAGE_COUNT)) - TARGET_DATA_RAW_BYTES,
-                (PAYLOAD_SIZE * QWORD(PAGE_COUNT) - TARGET_DATA_RAW_BYTES) / PHYSICAL_CORE_COUNT,
+                (PAYLOAD_SIZE * QWORD(page_count)) - TARGET_DATA_RAW_BYTES,
+                (PAYLOAD_SIZE * QWORD(page_count) - TARGET_DATA_RAW_BYTES) / PHYSICAL_CORE_COUNT,
                 size_of(data_typeid),
                 align_of(data_typeid),
                 start,
@@ -469,15 +483,15 @@ register_columnar :: proc(world : ^World($page_count, $thread_count), $data_type
 
         {
             when align_of(data_typeid) == 8{
-                world.header.meta_list[table_index].page_mode = PageMode.SIMD4
+                world.header[table_index].page_mode = PageMode.SIMD4
             }else when align_of(data_typeid) > 8 || align_of(data_typeid) < 4{
-                world.header.meta_list[table_index].page_mode = PageMode.SCALAR
+                world.header[table_index].page_mode = PageMode.SCALAR
             }else when align_of(data_typeid) == 4{
-                world.header.meta_list[table_index].page_mode = PageMode.SIMD8
+                world.header[table_index].page_mode = PageMode.SIMD8
             }
         }
         
-        //TODO Set up the free list
+        //TODO:Khal Set up the free list elements
         {
             
 
@@ -525,12 +539,6 @@ sync :: proc(){
 
 }
 
-//0..53, 53..73, 73..92, 92..160
-indices_intersect_blob :: proc(){
-    
-}
-
-
 query :: proc(){
 
 
@@ -570,14 +578,12 @@ query :: proc(){
      }
 
 
- 	 world : World(1,4) = ---
 
-     //Create a world with 24 columnar page where each columnar page is a single page size
-     init_world(&world, 24)
+  	 world : World(5,4) = ---
 
-          
+     init_world(&world, 1)
      //Register (NPC) Position "component" in the world. 
-     //register_columnar(world, Position, NPC_POSITION_STORAGE_INDEX, 200)
+     //register_columnar(&world, Position, NPC_POSITION_STORAGE_INDEX,4,0, 200)
 
      
      when ODIN_DEBUG && DUMP{

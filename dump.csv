@@ -1,1 +1,2 @@
-
+World address input w, page_count constant r, thread_count constant r, unique_data_count constant r, total_columnar_bytes local r, total_header_bytes local w, total_size local w, buffer_address local w, world_header_address input w, world_columnar_table input w, ds_op_bytes constant r, ds_buffer_bytes constant r, world_ds_ops_address input w, world_ds_buffer_address input w, world_owner_thread_id input w, 
+140733905063808, 5, 4, 1, 20480, 4096, 24576, 139674641915904, 139674641915904, 139674641920000, 4096, 131072, 139674641911808, 139674640715776, 683854
