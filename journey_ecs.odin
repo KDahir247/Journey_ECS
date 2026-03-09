@@ -685,19 +685,19 @@ update :: proc(){
      init_world(&world, 28)
      
      //Register (NPC) Position "component" in the world. 
-     register_columnar(&world, Position, 0,0, 67)
+     register_columnar(&world, Position, NPC_POSITION_STORAGE_INDEX, 0, 67)
 
      set_data :: proc(buf : [^]BYTE, meta : DataMeta){
-         data : [^]#soa[4]Position = transmute([^]#soa[4]Position)buf
+         data : [^]#soa[8]Position = transmute([^]#soa[8]Position)buf
 
          for i in 0..<1{
-             (^#simd[4]f32)(&data[i].x)^ = {2,2,2,2}
+             (^#simd[8]f32)(&data[i].x)^ = {2,2,2,2,2,2,2,2}
          }
          
      }
 
      print_data :: proc(buf : [^]BYTE, meta : DataMeta){
-         data : [^]#soa[4]Position = transmute([^]#soa[4]Position)buf
+         data : [^]#soa[8]Position = transmute([^]#soa[8]Position)buf
 
          for i in 0..<1{
              fmt.println(data[i])
@@ -705,8 +705,8 @@ update :: proc(){
          
      }
      
-     run_0(&world, 0, set_data, {})
-     run_0(&world, 0, print_data, {})
+     run_0(&world, NPC_POSITION_STORAGE_INDEX, set_data, {})
+     run_0(&world, NPC_POSITION_STORAGE_INDEX, print_data, {})
      
      when ODIN_DEBUG && DUMP{
 
