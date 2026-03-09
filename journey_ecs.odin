@@ -115,6 +115,8 @@ Design:
 //Assume user support SSE2, SSE3, SSSE3, SSE4.1, SSE4.2, AVX, AVX2
 //Assume user has 16, 32 gb, and 64 gb of ram
 
+SINGLE :: distinct f32
+DOUBLE :: distinct f64
 BYTE :: distinct u8
 WORD :: distinct u16
 DWORD :: distinct u32
@@ -241,6 +243,49 @@ when ODIN_DEBUG && DUMP{
         linux.truncate(path, 0)
         linux.write(file_handle, builder.buf[:])
     }
+}
+
+sysm_proc :: #type proc(data_buffer : [^]BYTE, data_meta : DataMeta) 
+
+DataMeta :: struct{
+    lane_count : QWORD,
+    total_indices : QWORD,
+}
+
+SysmValue :: union{
+    SINGLE,
+    DOUBLE,
+    BYTE,
+    WORD,
+    DWORD,
+    QWORD,
+}
+
+CombinatorOperation :: enum BYTE{
+    NIL = 0,
+    AND,
+    OR,
+    //NOT,
+    //XOR,
+    //NAND
+}
+
+ComparisionOperation :: enum BYTE{
+    GT,
+    GTE,
+    EQ,
+    NEQ,
+    LT,
+    LTE,
+    NOTIN,
+    IN,
+}
+
+SystemPredicate :: struct{
+    val : QWORD,
+    offset : WORD,
+    cmp_op : ComparisionOperation,
+    combinator_op : CombinatorOperation,
 }
 
 PageThreadAccess :: enum u8{
@@ -510,13 +555,11 @@ where intrinsics.type_is_struct(data_typeid) && end > start &&  page_count > 0 &
     {
         TARGET_DATA_BIT_COUNT :: TARGET_DATA_COUNT >> 6
         TARGET_DATA_BIT_REMAINING :: TARGET_DATA_COUNT & 63
-        fmt.println(TARGET_DATA_COUNT, TARGET_RAW_BYTES)
         for i in 0..<TARGET_DATA_BIT_COUNT{
             world.columnar_table[table_index].bit_zero_mask[i] = 0xFFFFFFFFFFFFFFFF 
         }
 
         world.columnar_table[table_index].bit_zero_mask[TARGET_DATA_BIT_COUNT] = (1 << TARGET_DATA_BIT_REMAINING) -1 
-        fmt.println(world.columnar_table[table_index].bit_zero_mask)
     }
 
     //TODO:Khal Set up the free list elements
@@ -527,72 +570,85 @@ where intrinsics.type_is_struct(data_typeid) && end > start &&  page_count > 0 &
 }
 
 
-fetch_columnar_types :: proc(world : ^World($page_count, $thread_count), indice : QWORD)
-where page_count > 0 && thread_count <= 4 && thread_count & 1 == 0 {
+/*
+Brief Problem we are trying to solve:
 
-    for i in 0..<world.table_count{
-        start : DWORD = world.header[i].start_indices
-        end : DWORD = world.header[i].end_indices
+We want to create a iterator that will run through the payload (BYTE buffer) and chunk the buffer
+When iterating we may want some fine specific type of data within the payload or columnar_table/s
+For example we may want Indices that contain both Velocity and Gravity, thus we need to filter out indices
+that only contain one or the other or neither of it.
 
-        if DWORD(indice) >= start && DWORD(indice) < end{
-            //From here we need to check the bitmask.
-            //match...
-        }
-    }
-}
+I also want to add data predicate which will be similar to most SQL database query syntax
+which are the following; AND, OR, WHERE, NOT,BETWEEN(A and B), IN(A, field_name), FILTER(EQ,LT,GT,LTE, GTE)
 
+This procedure should be really extremely fast due to it being called every frame (that will be 240 times per second for a 240 fps
+                                                                                   and 144 times per second for 144 fps and 60 times
+                                                                                   per second for a 60 fps (lowest_target))
+Thus we need to cache as much as possible on what we can, since it is using SIMD layout internally for the payload layout
+the implementation should avoid using branching for both the indices filter and the data predicate by using masking
 
-//Runtime change on the columnar metadata require sync after call
-commit_to_columnar :: proc(world : ^$T/World, $table_index : QWORD, $commit_count : QWORD){
-    commited_data_bytes : QWORD = ---
+The implementation shouldn't extensively rely on caching since the data predicate result may change, for example
+a value change to be greater than let say 5 but the data predicate is for less than 5. This make caching data predicate
+very cumbersome when there is any changes in the payload
 
-    columnar := &world.columnar_table[table_index]
-
-    COMMIT_GRANULARITY :: PHYSICAL_CORE_COUNT * CACHE_LINE    
-    committed_data_bytes := ((columnar.data_size * commit_count) + (COMMIT_GRANULARITY - 1)) / COMMIT_GRANULARITY * COMMIT_GRANULARITY
-
-    //if not_the_owning_thread_for_the_world{
-    //    sync_block for write
-
-    //    write to the deferred structual command buffer
+Input:
 
 
-    //    return
-    //}
-    
+Output:
 
-    if committed_data_bytes < columnar.reserved_data_bytes {
 
-        //TODO:khal sync lock and than do operation below. We than append command buffer so chunk can be rebuilt on the main thread.
+Goals:
+
+
+Limit:
+
+
+
+Assumption:
+
+The type is not known until it is converted to the the specific type by the user in the system procedure.
+
+We know the data may change each frame thus the predicate result may change each frame, but the sequence of instruction
+from the predicate will be the same for each run
+
+
+
+
+*/
+
+
+run_0 :: proc(world : ^World($page_count, $thread_count), $table_index : QWORD, sysm : sysm_proc, predicates : ..SystemPredicate){
+
+    //This must be fast (Time critical) happens per frame.
+    for pred in predicates{
         
-        columnar.allocated_data_bytes += committed_data_bytes
-        columnar.data_bytes_per_core +=  (committed_data_bytes / PHYSICAL_CORE_COUNT)
-        columnar.reserved_data_bytes -= committed_data_bytes
-        columnar.reserved_data_bytes_per_core -= (committed_data_bytes / PHYSICAL_CORE_COUNT)
-        columnar.end += commit_count
+        
+        
+        
+
+
     }
-}
-
-//TODO:Khal any runtime changes in the columnar metadata will require synchronization between threads.
-sync :: proc(){
 
 
-
-}
-
-query :: proc(){
-
-
-
+    
+    
+    sysm(raw_data(world.columnar_table[table_index].payload[:]), {})
+    
 }
 
 
-//TODO:Khal if we pass the responsiblity to the user to reuse the indice/s than we need to create a proc that get all the data that the indice has.
-//This will be done in bulk. This will do no structual change and should be thread safe, since we are reading from the indices section.
+//TODO:Khal refer to sql update for inspiration
+update :: proc(){
 
+
+}
 
 //Paralllel loop implementation?????????
 
+  Position :: struct{
+         x : f32,
+         y : f32,
+     }
 
  //Used for testing. Remove when fully implemented.
  main :: proc(){
@@ -613,10 +669,7 @@ query :: proc(){
 		 bar : f32,
 	 }
 
-     Position :: struct{
-         x : f32,
-         y : f32,
-     }
+   
 
      Bar :: struct{
          x : WORD
@@ -634,9 +687,26 @@ query :: proc(){
      //Register (NPC) Position "component" in the world. 
      register_columnar(&world, Position, 0,0, 67)
 
-     
-     fetch_columnar_types(&world, 27)
+     set_data :: proc(buf : [^]BYTE, meta : DataMeta){
+         data : [^]#soa[4]Position = transmute([^]#soa[4]Position)buf
 
+         for i in 0..<1{
+             (^#simd[4]f32)(&data[i].x)^ = {2,2,2,2}
+         }
+         
+     }
+
+     print_data :: proc(buf : [^]BYTE, meta : DataMeta){
+         data : [^]#soa[4]Position = transmute([^]#soa[4]Position)buf
+
+         for i in 0..<1{
+             fmt.println(data[i])
+         }
+         
+     }
+     
+     run_0(&world, 0, set_data, {})
+     run_0(&world, 0, print_data, {})
      
      when ODIN_DEBUG && DUMP{
 
@@ -658,7 +728,6 @@ query :: proc(){
      //Get All Data?
      //Query
      //Run
-     //Recylce "entity" (Way later... or possible no implemented)
-     //defrag indices
-    
+     //Sync
+     //Deferred operation (recylce entities)
  }
