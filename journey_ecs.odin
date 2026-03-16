@@ -124,26 +124,29 @@ QWORD :: distinct u64
 SIGNED32 :: distinct i32
 SIGNED64 :: distinct i64
 
-BYTES_BIT_SIZE :: 8
-WORD_BIT_SIZE :: 16
-DWORD_BIT_SIZE :: 32
-QWORD_BIT_SIZE :: 64
+BYTES_BIT_SIZE : QWORD : 8
+WORD_BIT_SIZE : QWORD : 16
+DWORD_BIT_SIZE : QWORD : 32
+QWORD_BIT_SIZE : QWORD : 64
 
-CACHE_LINE :: 64
-PAGE_SIZE :: 4096
-PAYLOAD_SIZE :: 3904
-PAGE_BIT_SIZE :: PAGE_SIZE * 8
+CACHE_LINE : QWORD : 64
+PAGE_SIZE : QWORD : 4096
+PAYLOAD_SIZE : QWORD : 3904
+PAGE_BIT_SIZE : QWORD : PAGE_SIZE * 8
 
-XMM_BYTES :: 16
-YMM_BYTES :: 32
-ZMM_BYTES :: 64
+XMM_BYTES : QWORD : 16
+YMM_BYTES : QWORD : 32
+ZMM_BYTES : QWORD : 64
 
+DUMP : bool : #config(CSV_DUMP, false)
 
-DUMP :: #config(CSV_DUMP, false)
+LOGICAL_CORE_COUNT : QWORD : #config(CORE, 8)
+PHYSICAL_CORE_COUNT : QWORD : LOGICAL_CORE_COUNT / 2
 
-LOGICAL_CORE_COUNT :: #config(CORE, 8)
-PHYSICAL_CORE_COUNT :: LOGICAL_CORE_COUNT / 2
-
+FIRST_THREAD : QWORD : 0
+SECOND_THREAD : QWORD : 1
+THIRD_THREAD : QWORD : 2
+FOURTH_THREAD : QWORD : 3
 
 //TODO:Khal we need to incorperate a way to make each new procedure call go in a new row, currently it just add to the column 
 when ODIN_DEBUG && DUMP{
@@ -281,9 +284,9 @@ ComparisionOperation :: enum BYTE{
     IN,
 }
 
-SystemPredicate :: struct{
-    val : QWORD,
-    offset : WORD,
+SystemPredicate :: struct($type : typeid){
+    val : type,
+    byte_offset : WORD,
     cmp_op : ComparisionOperation,
     combinator_op : CombinatorOperation,
 }
@@ -553,8 +556,8 @@ where intrinsics.type_is_struct(data_typeid) && end > start &&  page_count > 0 &
 
     
     {
-        TARGET_DATA_BIT_COUNT :: TARGET_DATA_COUNT >> 6
-        TARGET_DATA_BIT_REMAINING :: TARGET_DATA_COUNT & 63
+        TARGET_DATA_BIT_COUNT : QWORD : TARGET_DATA_COUNT >> 6
+        TARGET_DATA_BIT_REMAINING : QWORD : TARGET_DATA_COUNT & 63
         for i in 0..<TARGET_DATA_BIT_COUNT{
             world.columnar_table[table_index].bit_zero_mask[i] = 0xFFFFFFFFFFFFFFFF 
         }
@@ -576,7 +579,7 @@ Brief Problem we are trying to solve:
 We want to create a iterator that will run through the payload (BYTE buffer) and chunk the buffer
 When iterating we may want some fine specific type of data within the payload or columnar_table/s
 For example we may want Indices that contain both Velocity and Gravity, thus we need to filter out indices
-that only contain one or the other or neither of it.
+that contains both Velocity and Gravity.
 
 I also want to add data predicate which will be similar to most SQL database query syntax
 which are the following; AND, OR, WHERE, NOT,BETWEEN(A and B), IN(A, field_name), FILTER(EQ,LT,GT,LTE, GTE)
@@ -590,6 +593,11 @@ the implementation should avoid using branching for both the indices filter and 
 The implementation shouldn't extensively rely on caching since the data predicate result may change, for example
 a value change to be greater than let say 5 but the data predicate is for less than 5. This make caching data predicate
 very cumbersome when there is any changes in the payload
+
+Since this procedure is time sensitive we need to reduce random unpredictable branching. This can be done by using a mask.
+If we use a mask we need to store the previous buffer/s in some temp storage and than update the values of the columnar payload in the system and
+from there do a mask like simd using the old previous value and the new values. If the predicate passes than we will use the new values otherwise revert to the old values
+the system will operate on all the data though and is oblivous on this masking step. The masking step is only done internally in the run_x procedure
 
 Input:
 
@@ -617,20 +625,64 @@ from the predicate will be the same for each run
 */
 
 
-run_0 :: proc(world : ^World($page_count, $thread_count), $table_index : QWORD, sysm : sysm_proc, predicates : ..SystemPredicate){
-
+run_0 :: proc(world : ^World($page_count, $thread_count), $table_index : QWORD, thread_index : QWORD, sysm : sysm_proc, predicates : []SystemPredicate($N))
+{
+    header : ColumnarHeader = ---
+    aos_soa_len : QWORD = ---
+    aos_soa_elem_per_core : QWORD = ---
+    aos_soa_elem_offset : QWORD = ---
+    //We need a scratch buffer to store the results or we need something that retains the old values
+    
+    header = world.header[table_index]
+    
     //This must be fast (Time critical) happens per frame.
-    for pred in predicates{
+    
+    if header.page_mode == .SIMD8{
+        aos_soa_struct_bytes : QWORD = ---
+        aos_soa_struct_bytes = QWORD(header.data_size) * 8
         
-        
-        
-        
+        aos_soa_len = header.allocated_data_bytes / QWORD(header.data_size * 8)
+        aos_soa_elem_per_core = aos_soa_len / thread_count
+        aos_soa_elem_offset = aos_soa_elem_per_core * thread_index
+        for pred in predicates {
+
+            for aos_soa_index in 0..<aos_soa_elem_per_core{
+                aos_soa_bytes_offset : QWORD = ---
+                
+                aos_soa_bytes_offset = (aos_soa_elem_offset * aos_soa_struct_bytes) + (aos_soa_struct_bytes * aos_soa_index) + (QWORD(pred.byte_offset) * 8)
+
+                
+                //We load this aos_soa_bytes_offset into a simd type with lane of 8 and type of N
+                //We can do all the operation and than just mask out the one we don't need. That a possibility (simd.lane_gt, simd.lane_lt, simd.lane_le, simd.lane_ge, simd.lane_eq, simd.lane_ne)
+            }
+            
+            
+        }
 
 
+    }else if header.page_mode == .SIMD4{
+        aos_soa_struct_bytes : QWORD = ---
+        aos_soa_struct_bytes = QWORD(header.data_size) * 4
+
+        aos_soa_len = header.allocated_data_bytes / QWORD(header.data_size * 4)
+        aos_soa_elem_per_core = aos_soa_len / thread_count
+        aos_soa_elem_offset = aos_soa_elem_per_core * thread_index
+        
+        for pred in predicates{
+
+            for aos_soa_index in 0..<aos_soa_elem_per_core{
+                aos_soa_bytes_offset : QWORD = ---
+                
+                aos_soa_bytes_offset = (aos_soa_elem_offset * aos_soa_struct_bytes) + (aos_soa_struct_bytes * aos_soa_index) + (QWORD(pred.byte_offset) * 4)
+
+
+                //We load this aos_soa_bytes_offset into a simd type with lane of 4 and type of N
+                //We can do all the operation and than just mask out the one we don't need. That a possibility (simd.lane_gt, simd.lane_lt, simd.lane_le, simd.lane_ge, simd.lane_eq, simd.lane_ne)
+                
+            }
+        }
     }
 
-
-    
     
     sysm(raw_data(world.columnar_table[table_index].payload[:]), {})
     
@@ -679,7 +731,7 @@ update :: proc(){
          x : BYTE
      }
 
-
+     
   	 world : World(2,4) = ---
 
      init_world(&world, 28)
@@ -704,9 +756,12 @@ update :: proc(){
          }
          
      }
+
+     //I Should create a helper to compute the byte offset
+     a : SystemPredicate(QWORD) = {1, 0,.GT,.NIL}
      
-     run_0(&world, NPC_POSITION_STORAGE_INDEX, set_data, {})
-     run_0(&world, NPC_POSITION_STORAGE_INDEX, print_data, {})
+     run_0(&world, NPC_POSITION_STORAGE_INDEX, SECOND_THREAD, set_data, []SystemPredicate(QWORD){a})
+     //run_0(&world, NPC_POSITION_STORAGE_INDEX, FIRST_THREAD, print_data, []SystemPredicate(QWORD){a})
      
      when ODIN_DEBUG && DUMP{
 
