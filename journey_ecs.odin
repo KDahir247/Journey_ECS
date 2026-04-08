@@ -168,7 +168,8 @@ when ODIN_DEBUG && DUMP{
     csv_global : CSVDump
     csv_index : QWORD = 0
     @(init)
-    setup_csv :: proc(){
+    setup_csv :: proc "contextless"(){
+        context = runtime.default_context()
         csv_global.cols = make([]CSVColumn, 64)
         csv_global.index = make_map(map[string]QWORD)
      }
@@ -248,7 +249,7 @@ when ODIN_DEBUG && DUMP{
     }
 }
 
-sysm_proc :: #type proc(data_buffer : [^]BYTE, data_meta : DataMeta) 
+sysm_proc :: #type proc "contextless" (data_buffer : [^]BYTE, data_meta : DataMeta) 
 
 DataMeta :: struct{
     lane_count : QWORD,
@@ -284,59 +285,68 @@ ComparisionOperation :: enum BYTE{
     IN,
 }
 
-SystemPredicate :: struct($type : typeid){
-    val : type,
+SystemPredicate :: struct{
+    val : QWORD,
     byte_offset : WORD,
     cmp_op : ComparisionOperation,
     combinator_op : CombinatorOperation,
 }
 
-PageThreadAccess :: enum u8{
-    ThreadLocal,
-    ThreadReadonly,
-    ThreadReadWrite,
+
+THREAD_LOCAL : DWORD : 0b0000_0000_0000_0001
+THREAD_READONLY : DWORD : 0b0000_0000_0000_0010
+THREAD_READWRITE : DWORD : 0b0000_0000_0000_0011
+
+STRUCTURAL_CHANGE : DWORD : 0b0000_0000_0001_0000
+NO_STRUCTURAL_CHANGE : DWORD : 0b0000_0000_0010_0000
+STRUCTURAL_DYNAMIC : DWORD : 0b0000_0000_0011_0000
+
+OUTPUT : DWORD : 0b0000_0001_0000_0000
+INPUT : DWORD : 0b0000_0010_0000_0000
+INPUT_OUTPUT : DWORD : 0b0000_0011_0000_0000
+
+SIMD_8 : DWORD : 0b0011_0000_0000_0000
+SIMD_4 : DWORD : 0b0001_0000_0000_0000
+SCALAR : DWORD : 0b0010_0000_0000_0000
+
+
+World :: struct($THREAD_COUNT : DWORD) #align(64){
+    header : [^]ColumnarHeader,
+    query_block_mask : [^]BlockMask,
+    columnar_table : [^]ColumnarPage,
+    unique_components_count : QWORD,
+    owner_thread_id : QWORD,
+    ds_ops : [^]StructuralOperation,
+    dso_buffer : [^]BYTE,
+    sync_frame_gen : QWORD,
+    
+
+    sync_point : [4]AtomicSynchronization,
 }
 
-PageStructuralOperation :: enum u8{
-    StructuralChange,
-    NoStructuralChange,
+ColumnarHeader :: struct{
+    data_size : DWORD,
+    start_indices_index : DWORD,
+    end_indices_index : DWORD,
+    flags : DWORD, //high 16 bit are reserved
 }
 
-PageDataAccess :: enum u8{
-    InputOutput,
-    Input,
-    Output,
+BlockMask :: struct{
+    enabled_mask : BYTE,
+    disabled_mask : BYTE,
 }
 
-PageMode :: enum u8{
-    SIMD8,
-    SIMD4,
-    MASK8,
-    MASK4, 
-    SCALAR,
+ColumnarPage :: struct #align(4096){
+    bit_zero_mask : [8]QWORD,
+    payload : [4032]BYTE,
 }
 
-StructuralOperation :: enum u8{
+
+StructuralOperation :: enum BYTE{
     PUSH, 
     POP,
     GROW,
     SHRINK,
-}
-
-
-World :: struct($PAGE_COUNT : QWORD, $THREAD_COUNT : QWORD) #align(64){
-    header : [^]ColumnarHeader,
-    columnar_table : [^]ColumnarPage(PAGE_COUNT),
-    table_count : QWORD,
-    owner_thread_id : QWORD,
-    ds_ops : [^]StructuralOperation,
-    dso_buffer : [^]BYTE,
-    //TODO:Khal structure layout is not done yet.
-    free_list : [^]FreeList,
-    sync_frame_gen : QWORD,
-    
-    
-    sync_point : [4]AtomicSynchronization,
 }
 
 //The size of the Op structs can not be greater than 32 bytes
@@ -357,60 +367,33 @@ ShrinkOp :: struct{
     //implement me
 }
 
-ColumnarHeader :: struct{
-    allocated_data_bytes : QWORD,
-    reserved_data_bytes : QWORD,
-    
-    data_size : DWORD,
-    start_indices : DWORD,
-    end_indices : DWORD,
-
-    thread_access : PageThreadAccess,
-    structural_op : PageStructuralOperation,
-    data_access : PageDataAccess,
-    page_mode : PageMode,
-}
-
-
-FreeList :: struct{
-    temp : QWORD,
-    //implement me
-}
-
-ColumnarPage :: struct($PAGE_COUNT: QWORD){
-    bit_zero_mask : [16 * PAGE_COUNT]QWORD,
-    payload : [3968 * PAGE_COUNT]BYTE,
-}
-
 
 AtomicSynchronization :: struct #align(64){
     atomic_bitmask : DWORD,
-    //TODO:Khal add sync metadata if needed
+    //TODO:Khal implement me and add sync metadata if needed
 }
 
 
 @(optimization_mode="favor_size") 
-init_world :: proc (world : ^World($page_count, $thread_count), $unique_data_capacity : QWORD)
-where page_count > 0 && thread_count <= 4 && thread_count & 1 == 0 {
+init_world :: proc (world : ^World($thread_count), $unique_data_capacity : QWORD)
+where thread_count <= 4 && thread_count & 1 == 0 && unique_data_capacity > 0 {
 
     when ODIN_DEBUG && DUMP{
         append_csv("init_world", 0)
         append_csv("World address input w", QWORD(uintptr(world)))
-        append_csv("page_count constant r", QWORD(page_count))
         append_csv("thread_count constant r", QWORD(thread_count))
         append_csv("unique_data_count constant r", QWORD(unique_data_capacity))
      }
 
+
+    buffer_address : uintptr = ---
+    
     {
-        buffer_address : uintptr = ---
+        REQUIRED_HEADER_BYTES : QWORD : (size_of(ColumnarHeader) * unique_data_capacity + 0xFFF) & 0xFFFFFFFFFFFFF000
+        REQUIRED_BLOCK_BYTES : QWORD : (size_of(BlockMask) * unique_data_capacity + 0xFFF)  & 0xFFFFFFFFFFFFF000
+        REQUIRED_COLUMNAR_BYTES : QWORD : size_of(ColumnarPage) * unique_data_capacity
 
-        HEADER :: ColumnarHeader
-        COLUMNAR :: ColumnarPage(page_count)
-
-        REQUIRED_HEADER_BYTES : QWORD : (size_of(HEADER) * unique_data_capacity + 0xFFF) & 0xFFFFFFFFFFFFF000
-        REQUIRED_COLUMNAR_BYTES : QWORD : size_of(COLUMNAR) * unique_data_capacity
-
-        REQUIRED_TOTAL_BYTES : QWORD : REQUIRED_HEADER_BYTES + REQUIRED_COLUMNAR_BYTES
+        REQUIRED_TOTAL_BYTES : QWORD : REQUIRED_HEADER_BYTES + REQUIRED_BLOCK_BYTES + REQUIRED_COLUMNAR_BYTES
 
         buffer_address = intrinsics.syscall(
             linux.SYS_mmap,
@@ -422,153 +405,190 @@ where page_count > 0 && thread_count <= 4 && thread_count & 1 == 0 {
             uintptr(0),
         )
 
-        world.header = cast(^HEADER)(buffer_address)
-        world.columnar_table = cast([^]COLUMNAR)(buffer_address + uintptr(REQUIRED_HEADER_BYTES))
-        world.table_count = unique_data_capacity
+        world.header = cast([^]ColumnarHeader)(buffer_address)
+        world.query_block_mask = cast([^]BlockMask)(buffer_address + uintptr(REQUIRED_HEADER_BYTES))
+        world.columnar_table = cast([^]ColumnarPage)(buffer_address + uintptr(REQUIRED_HEADER_BYTES + REQUIRED_BLOCK_BYTES))
+
+        world.unique_components_count = unique_data_capacity
+
         when ODIN_DEBUG && DUMP{
             append_csv("total_columnar_bytes local r", REQUIRED_COLUMNAR_BYTES)
             append_csv("total_header_bytes local w", REQUIRED_HEADER_BYTES)
             append_csv("total_size local w", REQUIRED_TOTAL_BYTES)
+            
             append_csv("buffer_address local w", QWORD(uintptr(buffer_address)))
             append_csv("world_header_address input w", QWORD(uintptr(world.header)))
+            append_csv("world_query_mask_address input w", QWORD(uintptr(world.query_block_mask)))
             append_csv("world_columnar_table input w", QWORD(uintptr(world.columnar_table)))
         }
         
     }
 
     world.owner_thread_id = QWORD(intrinsics.syscall(linux.SYS_gettid))
-    
-    {
-        REQUIRED_DS_OP_BYTES : QWORD : 4096 //assuming the op enum to be 1 byte so we can issue 4096
-        REQUIRED_DS_BUFFER_BYTES : QWORD : 131072 //assuming limit of op struct to be 32 byte so (131072 / 32) is 4096, so we can issue 4096 
-         
-        world.ds_ops = cast([^]StructuralOperation)intrinsics.syscall(
-            linux.SYS_mmap,
-            0x00,
-            uintptr(REQUIRED_DS_OP_BYTES),
-            uintptr(0x03),
-            uintptr(0x21),
-            ~uintptr(0),
-            uintptr(0),
-        )
-        
-        world.dso_buffer = cast([^]BYTE)intrinsics.syscall(
-            linux.SYS_mmap,
-            0x00,
-            uintptr(REQUIRED_DS_BUFFER_BYTES),
-            uintptr(0x03),
-            uintptr(0x21),
-            ~uintptr(0),
-            uintptr(0),
-        )
-
-        when ODIN_DEBUG && DUMP{
-            append_csv("ds_op_bytes constant r", QWORD(REQUIRED_DS_OP_BYTES))
-            append_csv("ds_buffer_bytes constant r", QWORD(REQUIRED_DS_BUFFER_BYTES))
-            
-            append_csv("world_ds_ops_address input w", QWORD(uintptr(world.ds_ops)))
-            append_csv("world_ds_buffer_address input w", QWORD(uintptr(world.dso_buffer)))
-        }
-    }
-
-    //TODO:Khal add FreeList initialization
-    {
-
-
-
-
-
-    }
 
     when ODIN_DEBUG && DUMP{
         append_csv("world_owner_thread_id input w", QWORD(world.owner_thread_id))
     }
- }
-
-
-@(optimization_mode="favor_size", enable_target_feature="avx,avx2")
-register_columnar :: proc(world : ^World($page_count, $thread_count), $data_typeid : typeid, $table_index : QWORD, $start : QWORD, $end : QWORD)
-where intrinsics.type_is_struct(data_typeid) && end > start &&  page_count > 0 && thread_count <= 4 && thread_count & 1 == 0{
-
-    when align_of(data_typeid) == 8{
-        LANE_COUNT : QWORD : 4
-        PAGE_MODE : PageMode : .SIMD4
-    }else when align_of(data_typeid) > 8 || align_of(data_typeid) < 4{
-        LANE_COUNT : QWORD : 1
-        PAGE_MODE : PageMode : .SCALAR
-    }else when align_of(data_typeid) == 4{
-        LANE_COUNT : QWORD : 8
-        PAGE_MODE : PageMode : .SIMD8
-    }
-            
-    INDICES_CAPACITY : QWORD : end - start
-
-    SIMD_PADDED_INDICES_CAPACITY : QWORD : (INDICES_CAPACITY + LANE_COUNT - 0x01) / LANE_COUNT * LANE_COUNT
-    REQUIRED_SIMD_RAW_BYTES : QWORD : size_of(data_typeid) * SIMD_PADDED_INDICES_CAPACITY
-            
-    CACHE_ALIGNED_RAW_BYTES : QWORD : (REQUIRED_SIMD_RAW_BYTES + 0x3F) & 0xFFFFFFFFFFFFFFC0
-    OCCUPIED_CACHE_LINE : QWORD : CACHE_ALIGNED_RAW_BYTES / 0x40
-            
-    EVEN_DISTRIBUTED_CACHE_LINE : QWORD : (OCCUPIED_CACHE_LINE + thread_count - 1) / thread_count * thread_count
-    TARGET_RAW_BYTES : QWORD : EVEN_DISTRIBUTED_CACHE_LINE * 0x40
     
-    TARGET_DATA_COUNT : QWORD : TARGET_RAW_BYTES / size_of(data_typeid)
+    {   
+        REQUIRED_DS_OP_BYTES : QWORD : 4096 //assuming the op enum to be 1 byte so we can issue 4096
+        REQUIRED_DSO_BUFFER_BYTES : QWORD : 131072 //assuming limit of op struct to be 32 bytes so (131072 / 32) is 4096, so we can issue 4096 
+
+        REQUIRED_TOTAL_BYTES : QWORD : REQUIRED_DS_OP_BYTES + REQUIRED_DSO_BUFFER_BYTES
+        
+        buffer_address = intrinsics.syscall(
+            linux.SYS_mmap,
+            0x00,
+            uintptr(REQUIRED_TOTAL_BYTES),
+            uintptr(0x03),
+            uintptr(0x21),
+            ~uintptr(0),
+            uintptr(0),
+        )
+
+        world.ds_ops = cast([^]StructuralOperation)(buffer_address)
+        world.dso_buffer = cast([^]BYTE)(buffer_address + uintptr(REQUIRED_DS_OP_BYTES))
+       
+        when ODIN_DEBUG && DUMP{
+            append_csv("ds_op_bytes constant r", QWORD(REQUIRED_DS_OP_BYTES))
+            append_csv("dso_buffer_bytes constant r", QWORD(REQUIRED_DSO_BUFFER_BYTES))
+            append_csv("total_size constant r", QWORD(REQUIRED_TOTAL_BYTES))
+            
+            append_csv("buffer_address local w", QWORD(uintptr(buffer_address)))
+            append_csv("world_ds_ops_address input w", QWORD(uintptr(world.ds_ops)))
+            append_csv("world_ds_buffer_address input w", QWORD(uintptr(world.dso_buffer)))
+        }
+    }
+}
+
+
+@(optimization_mode="favor_size")
+register_columnar :: proc(world : ^World($thread_count), $data_typeid : typeid, $table_index : QWORD, $start : DWORD, $end : DWORD)
+where intrinsics.type_is_struct(data_typeid) && end > start && thread_count <= 4 && thread_count & 1 == 0 && size_of(data_typeid) > 4 #no_bounds_check{
 
     when ODIN_DEBUG && DUMP{
         append_csv("register_columnar", 0)
         append_csv("world_address input rw", QWORD(uintptr((world))))
-        append_csv("page_count constant r", QWORD(page_count))
         append_csv("thread_count constant r", QWORD(thread_count))
-        //append_csv("typeid_constant r", QWORD(data_typeid))
-        append_csv("table_index constant r", table_index)
-        append_csv("start_constant r", start)
-        append_csv("end constant r", end)
         append_csv("data_size constant r", size_of(data_typeid))
         append_csv("data_alignment constant r", align_of(data_typeid))
+        append_csv("table_index constant r", table_index)
+        append_csv("start_constant r", QWORD(start))
+        append_csv("end constant r", QWORD(end))
+    }
+    
+    when intrinsics.type_struct_has_implicit_padding(data_typeid){
+        LANE_COUNT : DWORD : 1
+        LANE_MASK : WORD : SCALAR
+    }else{
+        FIELD_IS_UNIFORM : bool : (align_of(data_typeid) * intrinsics.type_struct_field_count(data_typeid)) == size_of(data_typeid)
+        
+        when FIELD_IS_UNIFORM{
+            ELEMENT_SIZE : DWORD : size_of(data_typeid) / intrinsics.type_struct_field_count(data_typeid)
+
+            //We are currently using YMM SIMD 256
+            when ELEMENT_SIZE == 8{
+                LANE_COUNT : DWORD : 4
+                LANE_MASK : DWORD : SIMD_4
+            }else when ELEMENT_SIZE == 4{
+                LANE_COUNT : DWORD : 8
+                LANE_MASK : DWORD : SIMD_8
+            }else {
+                LANE_COUNT : DWORD : 1
+                LANE_MASK : DWORD : SCALAR
+            }
+            
+        }else{
+            LANE_COUNT : DWORD : 1
+            LANE_MASK : DWORD : SCALAR
+        }
+    }
+
+    INDICES_CAPACITY : DWORD : end - start
+
+    SIMD_PADDED_INDICES_CAPACITY : DWORD : (INDICES_CAPACITY + LANE_COUNT - 0x01) / LANE_COUNT * LANE_COUNT
+    REQUIRED_SIMD_RAW_BYTES : DWORD : size_of(data_typeid) * SIMD_PADDED_INDICES_CAPACITY
+            
+    CACHE_ALIGNED_RAW_BYTES : DWORD : DWORD(QWORD(REQUIRED_SIMD_RAW_BYTES + 0x3F) & 0xFFFFFFFFFFFFFFC0)
+    OCCUPIED_CACHE_LINE : DWORD : CACHE_ALIGNED_RAW_BYTES / 0x40
+            
+    EVEN_DISTRIBUTED_CACHE_LINE : DWORD : (OCCUPIED_CACHE_LINE + thread_count - 1) / thread_count * thread_count
+    TARGET_RAW_BYTES : DWORD : EVEN_DISTRIBUTED_CACHE_LINE * 0x40
+    
+    TARGET_STRUCT_COUNT : DWORD : TARGET_RAW_BYTES / size_of(data_typeid)
+
+    when ODIN_DEBUG && DUMP{
         append_csv("lane_count constant r", QWORD(LANE_COUNT))
+        append_csv("lane_mask constant r", QWORD(LANE_MASK))
+        
         append_csv("indices_capacity constant r", QWORD(INDICES_CAPACITY))
+        
         append_csv("simd_indices_capcity constant r", QWORD(SIMD_PADDED_INDICES_CAPACITY))
         append_csv("required_soa_aos_bytes constant r", QWORD(REQUIRED_SIMD_RAW_BYTES))
+        
         append_csv("cacheline_aligned_soa_aos_bytes constant r", QWORD(CACHE_ALIGNED_RAW_BYTES))
         append_csv("occupying cacheline constant r", QWORD(OCCUPIED_CACHE_LINE))
+        
         append_csv("even cacheline constant r", QWORD(EVEN_DISTRIBUTED_CACHE_LINE))
         append_csv("required_target_bytes constant r", QWORD(TARGET_RAW_BYTES))
+        
         append_csv("required_target_byter_per_core constant r", QWORD(TARGET_RAW_BYTES) / 4)
-        append_csv("required_data_count constant r", QWORD(TARGET_DATA_COUNT))
+        append_csv("required_data_count constant r", QWORD(TARGET_STRUCT_COUNT))
     }
-
     
     {
-        //Bottleneck on pagefault.
+        TARGET_DATA_BIT_COUNT : QWORD : QWORD(TARGET_STRUCT_COUNT >> 6)
+        TARGET_DATA_BIT_REMAINING : DWORD : TARGET_STRUCT_COUNT & 63
+
+        ENABLED_DATA_BIT_MASK : BYTE : (1 << TARGET_DATA_BIT_COUNT) - 1
+        when TARGET_DATA_BIT_REMAINING != 0{
+            DISABLED_DATA_BIT_MASK : BYTE : ~(ENABLED_DATA_BIT_MASK) - 1
+        }else{
+            DISABLED_DATA_BIT_MASK : BYTE : ~ENABLED_DATA_BIT_MASK
+        }
+        
+        bit_zero_mask_address : uintptr = ---
+
         world.header[table_index] = {
-            TARGET_RAW_BYTES,
-            (page_count * 4096) - TARGET_RAW_BYTES,
             size_of(data_typeid),
-            DWORD(start),
-            DWORD(end),
-                .ThreadLocal,
-                .StructuralChange,
-                .InputOutput,
-            PAGE_MODE,
+            start,
+            TARGET_STRUCT_COUNT + start,
+            THREAD_LOCAL | STRUCTURAL_CHANGE | INPUT_OUTPUT | LANE_MASK,
         }
-                      
-    }
-
-    
-    {
-        TARGET_DATA_BIT_COUNT : QWORD : TARGET_DATA_COUNT >> 6
-        TARGET_DATA_BIT_REMAINING : QWORD : TARGET_DATA_COUNT & 63
-        for i in 0..<TARGET_DATA_BIT_COUNT{
-            world.columnar_table[table_index].bit_zero_mask[i] = 0xFFFFFFFFFFFFFFFF 
+        
+        world.query_block_mask[table_index] = {
+            ENABLED_DATA_BIT_MASK,
+            DISABLED_DATA_BIT_MASK
         }
 
-        world.columnar_table[table_index].bit_zero_mask[TARGET_DATA_BIT_COUNT] = (1 << TARGET_DATA_BIT_REMAINING) -1 
-    }
+        bit_zero_mask_address = uintptr(world.columnar_table) + uintptr(table_index * size_of(ColumnarPage))
 
-    //TODO:Khal Set up the free list elements
-    {
+        when ODIN_DEBUG && DUMP{
+            append_csv("target_data_bit_count constant r", QWORD(TARGET_DATA_BIT_COUNT))
+            append_csv("target_data_bit_remaining constant r", QWORD(TARGET_DATA_BIT_REMAINING))
             
+            append_csv("enabled_data_bit_mask constant r", QWORD(ENABLED_DATA_BIT_MASK))
+            append_csv("disabled_data_bit_mask constant r", QWORD(DISABLED_DATA_BIT_MASK))
+            
+            append_csv("header_target_end local w", QWORD(TARGET_STRUCT_COUNT + start))
+            append_csv("header_target_flag local w", QWORD(THREAD_LOCAL | STRUCTURAL_CHANGE | INPUT_OUTPUT | LANE_MASK))
 
+            append_csv("bit_zero_mask_address local rw", QWORD(bit_zero_mask_address))
+        }
+
+        //We will utilize virtual address offset to determine if we are at the end.
+        //We know that the first 12 bits in the virtual address is always zero when using mmap, since it give you page granularity
+        //Thus if we know the end (how much bytes till we reach then end) we can compare the first 12 bits to the end to determine
+        //If the address has reached the end.
+        
+        TARGET_OCCUPYING_BITS_IN_VIRT : QWORD : size_of(QWORD) * TARGET_DATA_BIT_COUNT
+        
+        for !transmute(b64)(QWORD(bit_zero_mask_address) & TARGET_OCCUPYING_BITS_IN_VIRT){
+              (cast([^]QWORD)bit_zero_mask_address)[0] = ~QWORD(0)
+              bit_zero_mask_address += size_of(QWORD)
+        }
+
+        (cast([^]QWORD)bit_zero_mask_address)[0] = (1 << TARGET_DATA_BIT_REMAINING) - 1     
     }
 }
 
@@ -599,8 +619,11 @@ If we use a mask we need to store the previous buffer/s in some temp storage and
 from there do a mask like simd using the old previous value and the new values. If the predicate passes than we will use the new values otherwise revert to the old values
 the system will operate on all the data though and is oblivous on this masking step. The masking step is only done internally in the run_x procedure
 
-Input:
+We are going to make this procedure contextless to force user to pass system procedure that are contextless. In transformation there should not be any allocation or logging
+It should just be computation.
 
+Input:
+World pointer read from, table_index read from, thread_index read from. callback, predicate to filter on struct field granularity
 
 Output:
 
@@ -623,67 +646,9 @@ from the predicate will be the same for each run
 
 
 */
-
-
-run_0 :: proc(world : ^World($page_count, $thread_count), $table_index : QWORD, thread_index : QWORD, sysm : sysm_proc, predicates : []SystemPredicate($N))
+@(optimization_mode="favor_size")
+run_0 :: proc "contextless" (world : ^World($thread_count), $table_index : QWORD, thread_index : QWORD, sysm : sysm_proc, predicates : ..SystemPredicate)
 {
-    header : ColumnarHeader = ---
-    aos_soa_len : QWORD = ---
-    aos_soa_elem_per_core : QWORD = ---
-    aos_soa_elem_offset : QWORD = ---
-    //We need a scratch buffer to store the results or we need something that retains the old values
-    
-    header = world.header[table_index]
-    
-    //This must be fast (Time critical) happens per frame.
-    
-    if header.page_mode == .SIMD8{
-        aos_soa_struct_bytes : QWORD = ---
-        aos_soa_struct_bytes = QWORD(header.data_size) * 8
-        
-        aos_soa_len = header.allocated_data_bytes / QWORD(header.data_size * 8)
-        aos_soa_elem_per_core = aos_soa_len / thread_count
-        aos_soa_elem_offset = aos_soa_elem_per_core * thread_index
-        for pred in predicates {
-
-            for aos_soa_index in 0..<aos_soa_elem_per_core{
-                aos_soa_bytes_offset : QWORD = ---
-                
-                aos_soa_bytes_offset = (aos_soa_elem_offset * aos_soa_struct_bytes) + (aos_soa_struct_bytes * aos_soa_index) + (QWORD(pred.byte_offset) * 8)
-
-                
-                //We load this aos_soa_bytes_offset into a simd type with lane of 8 and type of N
-                //We can do all the operation and than just mask out the one we don't need. That a possibility (simd.lane_gt, simd.lane_lt, simd.lane_le, simd.lane_ge, simd.lane_eq, simd.lane_ne)
-            }
-            
-            
-        }
-
-
-    }else if header.page_mode == .SIMD4{
-        aos_soa_struct_bytes : QWORD = ---
-        aos_soa_struct_bytes = QWORD(header.data_size) * 4
-
-        aos_soa_len = header.allocated_data_bytes / QWORD(header.data_size * 4)
-        aos_soa_elem_per_core = aos_soa_len / thread_count
-        aos_soa_elem_offset = aos_soa_elem_per_core * thread_index
-        
-        for pred in predicates{
-
-            for aos_soa_index in 0..<aos_soa_elem_per_core{
-                aos_soa_bytes_offset : QWORD = ---
-                
-                aos_soa_bytes_offset = (aos_soa_elem_offset * aos_soa_struct_bytes) + (aos_soa_struct_bytes * aos_soa_index) + (QWORD(pred.byte_offset) * 4)
-
-
-                //We load this aos_soa_bytes_offset into a simd type with lane of 4 and type of N
-                //We can do all the operation and than just mask out the one we don't need. That a possibility (simd.lane_gt, simd.lane_lt, simd.lane_le, simd.lane_ge, simd.lane_eq, simd.lane_ne)
-                
-            }
-        }
-    }
-
-    
     sysm(raw_data(world.columnar_table[table_index].payload[:]), {})
     
 }
@@ -731,15 +696,16 @@ update :: proc(){
          x : BYTE
      }
 
-     
-  	 world : World(2,4) = ---
+
+
+  	 world : World(4) = ---
 
      init_world(&world, 28)
      
      //Register (NPC) Position "component" in the world. 
-     register_columnar(&world, Position, NPC_POSITION_STORAGE_INDEX, 0, 67)
-
-     set_data :: proc(buf : [^]BYTE, meta : DataMeta){
+     register_columnar(&world, Position,1, 21, 300)
+     
+     set_data :: proc "contextless" (buf : [^]BYTE, meta : DataMeta){
          data : [^]#soa[8]Position = transmute([^]#soa[8]Position)buf
 
          for i in 0..<1{
@@ -748,23 +714,24 @@ update :: proc(){
          
      }
 
-     print_data :: proc(buf : [^]BYTE, meta : DataMeta){
+     print_data :: proc "contextless" (buf : [^]BYTE, meta : DataMeta){
          data : [^]#soa[8]Position = transmute([^]#soa[8]Position)buf
 
          for i in 0..<1{
-             fmt.println(data[i])
+            // fmt.println(data[i])
          }
          
      }
 
      //I Should create a helper to compute the byte offset
-     a : SystemPredicate(QWORD) = {1, 0,.GT,.NIL}
-     
-     run_0(&world, NPC_POSITION_STORAGE_INDEX, SECOND_THREAD, set_data, []SystemPredicate(QWORD){a})
-     //run_0(&world, NPC_POSITION_STORAGE_INDEX, FIRST_THREAD, print_data, []SystemPredicate(QWORD){a})
+     a : SystemPredicate= {1, 0,.GT,.NIL}
+
+
+
+     run_0(&world, NPC_POSITION_STORAGE_INDEX, SECOND_THREAD, set_data, a,a)
+     run_0(&world, NPC_POSITION_STORAGE_INDEX, FIRST_THREAD, print_data, a,a)
      
      when ODIN_DEBUG && DUMP{
-
          dump_csv_to_file("/home/khalid/Documents/GitHub/Journey_ECS/dump.csv")
 
      }

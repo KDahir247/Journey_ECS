@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e  # stop if any command fails
 
+export ODIN_ROOT=/usr/lib/odin
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 
