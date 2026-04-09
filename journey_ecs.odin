@@ -252,8 +252,9 @@ when ODIN_DEBUG && DUMP{
 sysm_proc :: #type proc "contextless" (data_buffer : [^]BYTE, data_meta : DataMeta) 
 
 DataMeta :: struct{
-    lane_count : QWORD,
-    total_indices : QWORD,
+    //lane_count : QWORD,
+    data_size : DWORD,
+    total_indices : DWORD,
 }
 
 SysmValue :: union{
@@ -467,6 +468,7 @@ register_columnar :: proc(world : ^World($thread_count), $data_typeid : typeid, 
 where intrinsics.type_is_struct(data_typeid) && end > start && thread_count <= 4 && thread_count & 1 == 0 && size_of(data_typeid) > 4 #no_bounds_check{
 
     when ODIN_DEBUG && DUMP{
+        
         append_csv("register_columnar", 0)
         append_csv("world_address input rw", QWORD(uintptr((world))))
         append_csv("thread_count constant r", QWORD(thread_count))
@@ -535,13 +537,16 @@ where intrinsics.type_is_struct(data_typeid) && end > start && thread_count <= 4
         append_csv("required_target_byter_per_core constant r", QWORD(TARGET_RAW_BYTES) / 4)
         append_csv("required_data_count constant r", QWORD(TARGET_STRUCT_COUNT))
     }
-    
-    {
-        TARGET_DATA_BIT_COUNT : QWORD : QWORD(TARGET_STRUCT_COUNT >> 6)
-        TARGET_DATA_BIT_REMAINING : DWORD : TARGET_STRUCT_COUNT & 63
 
-        ENABLED_DATA_BIT_MASK : BYTE : (1 << TARGET_DATA_BIT_COUNT) - 1
-        when TARGET_DATA_BIT_REMAINING != 0{
+
+    {
+
+        FULL_MASK_QWORD : QWORD : QWORD(TARGET_STRUCT_COUNT >> 6)
+        REMAINING_MASK_BITS : DWORD : TARGET_STRUCT_COUNT & 63
+
+
+        ENABLED_DATA_BIT_MASK : BYTE : (1 << FULL_MASK_QWORD) - 1
+        when REMAINING_MASK_BITS != 0{
             DISABLED_DATA_BIT_MASK : BYTE : ~(ENABLED_DATA_BIT_MASK) - 1
         }else{
             DISABLED_DATA_BIT_MASK : BYTE : ~ENABLED_DATA_BIT_MASK
@@ -564,8 +569,8 @@ where intrinsics.type_is_struct(data_typeid) && end > start && thread_count <= 4
         bit_zero_mask_address = uintptr(world.columnar_table) + uintptr(table_index * size_of(ColumnarPage))
 
         when ODIN_DEBUG && DUMP{
-            append_csv("target_data_bit_count constant r", QWORD(TARGET_DATA_BIT_COUNT))
-            append_csv("target_data_bit_remaining constant r", QWORD(TARGET_DATA_BIT_REMAINING))
+            append_csv("full_mask_qword constant r", QWORD(FULL_MASK_QWORD))
+            append_csv("remaining_mask_bit_remaining constant r", QWORD(REMAINING_MASK_BITS))
             
             append_csv("enabled_data_bit_mask constant r", QWORD(ENABLED_DATA_BIT_MASK))
             append_csv("disabled_data_bit_mask constant r", QWORD(DISABLED_DATA_BIT_MASK))
@@ -576,19 +581,13 @@ where intrinsics.type_is_struct(data_typeid) && end > start && thread_count <= 4
             append_csv("bit_zero_mask_address local rw", QWORD(bit_zero_mask_address))
         }
 
-        //We will utilize virtual address offset to determine if we are at the end.
-        //We know that the first 12 bits in the virtual address is always zero when using mmap, since it give you page granularity
-        //Thus if we know the end (how much bytes till we reach then end) we can compare the first 12 bits to the end to determine
-        //If the address has reached the end.
-        
-        TARGET_OCCUPYING_BITS_IN_VIRT : QWORD : size_of(QWORD) * TARGET_DATA_BIT_COUNT
-        
-        for !transmute(b64)(QWORD(bit_zero_mask_address) & TARGET_OCCUPYING_BITS_IN_VIRT){
-              (cast([^]QWORD)bit_zero_mask_address)[0] = ~QWORD(0)
-              bit_zero_mask_address += size_of(QWORD)
+        when FULL_MASK_QWORD > 0{
+            for i in 0..<FULL_MASK_QWORD{
+                (cast([^]QWORD)bit_zero_mask_address)[i] = ~QWORD(0)
+            }
         }
 
-        (cast([^]QWORD)bit_zero_mask_address)[0] = (1 << TARGET_DATA_BIT_REMAINING) - 1     
+        (cast([^]QWORD)bit_zero_mask_address)[FULL_MASK_QWORD] = (1 << REMAINING_MASK_BITS) - 1
     }
 }
 
@@ -646,12 +645,30 @@ from the predicate will be the same for each run
 
 
 */
+
+build_sym_predicate :: proc($data_type : typeid, $field_name : string, $cmp_op : ComparisionOperation, val : $N, $comb_op : CombinatorOperation) -> SystemPredicate{
+    FIELD_OFFSET : uintptr : intrinsics.type_field_index_of(data_type, field_name)
+    FIELD_TYPE : typeid : intrinsics.type_field_type(data_type, field_name)
+
+
+    
+    
+    
+    return {}
+}
+
 @(optimization_mode="favor_size")
-run_0 :: proc "contextless" (world : ^World($thread_count), $table_index : QWORD, thread_index : QWORD, sysm : sysm_proc, predicates : ..SystemPredicate)
+run_0 :: proc  (world : ^World($thread_count), $table_index : QWORD, thread_index : QWORD, sysm : sysm_proc, predicates : ..SystemPredicate)
 {
+
+    
+    
+    
+    //Should we filter only the number of component specified in register_columnar???? or should we just let the user iterate over all the data type?
     sysm(raw_data(world.columnar_table[table_index].payload[:]), {})
     
 }
+
 
 
 //TODO:Khal refer to sql update for inspiration
@@ -661,19 +678,12 @@ update :: proc(){
 }
 
 //Paralllel loop implementation?????????
-
-  Position :: struct{
-         x : f32,
-         y : f32,
-     }
-
  //Used for testing. Remove when fully implemented.
  main :: proc(){
 
      HEALTH_STORAGE_INDEX :: 0
      NPC_POSITION_STORAGE_INDEX :: 1
      ENEMY_POSITION_STORAGE_INDEX :: 2
-     PROP_STORAGE_INDEX :: 4
 
      PropData :: struct{
          foo : QWORD,
@@ -683,29 +693,29 @@ update :: proc(){
      }
      
 	 Health :: struct{
-		 bar : f32,
+		 val : f32,
 	 }
 
-   
-
-     Bar :: struct{
-         x : WORD
+     Position :: struct{
+         x : f32,
+         y : f32,
      }
 
-     Baz :: struct{
-         x : BYTE
-     }
-
-
+     
+     player_position : Position = {5, 7}
+     player_health : Health = {100}
 
   	 world : World(4) = ---
 
      init_world(&world, 28)
      
      //Register (NPC) Position "component" in the world. 
-     register_columnar(&world, Position,1, 21, 300)
+     register_columnar(&world, Position, NPC_POSITION_STORAGE_INDEX, 21, 300)
+
      
-     set_data :: proc "contextless" (buf : [^]BYTE, meta : DataMeta){
+     register_columnar(&world, Position,2, 0, 1)
+     
+     readjust_npc_position :: proc "contextless" (buf : [^]BYTE, meta : DataMeta){
          data : [^]#soa[8]Position = transmute([^]#soa[8]Position)buf
 
          for i in 0..<1{
@@ -714,22 +724,11 @@ update :: proc(){
          
      }
 
-     print_data :: proc "contextless" (buf : [^]BYTE, meta : DataMeta){
-         data : [^]#soa[8]Position = transmute([^]#soa[8]Position)buf
+     npc_pos_overlapping_x := build_sym_predicate(Position, "x", .EQ, player_position.x, .OR)
+     npc_pos_overlapping_y := build_sym_predicate(Position, "y", .EQ, player_position.y, .NIL)
 
-         for i in 0..<1{
-            // fmt.println(data[i])
-         }
-         
-     }
-
-     //I Should create a helper to compute the byte offset
-     a : SystemPredicate= {1, 0,.GT,.NIL}
-
-
-
-     run_0(&world, NPC_POSITION_STORAGE_INDEX, SECOND_THREAD, set_data, a,a)
-     run_0(&world, NPC_POSITION_STORAGE_INDEX, FIRST_THREAD, print_data, a,a)
+     //This system will run for all the npc positions only if the player position is overlapping (either x or y) 
+     run_0(&world, NPC_POSITION_STORAGE_INDEX, SECOND_THREAD, readjust_npc_position, npc_pos_overlapping_x, npc_pos_overlapping_y)
      
      when ODIN_DEBUG && DUMP{
          dump_csv_to_file("/home/khalid/Documents/GitHub/Journey_ECS/dump.csv")
