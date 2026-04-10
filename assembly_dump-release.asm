@@ -1438,7 +1438,7 @@ Disassembly of section .text:
   402443:	48 83 ec 78          	sub    $0x78,%rsp
   402447:	4c 63 cf             	movslq %edi,%r9
   40244a:	45 85 c9             	test   %r9d,%r9d
-  40244d:	0f 88 3b 01 00 00    	js     40258e <main+0x14e>
+  40244d:	0f 88 37 01 00 00    	js     40258a <main+0x14a>
   402453:	48 89 35 f6 3b 00 00 	mov    %rsi,0x3bf6(%rip)        # 406050 <runtime::args__.0>
   40245a:	4c 89 0d f7 3b 00 00 	mov    %r9,0x3bf7(%rip)        # 406058 <runtime::args__.1>
   402461:	48 c7 44 24 08 60 1a 	movq   $0x401a60,0x8(%rsp)
@@ -1497,27 +1497,27 @@ Disassembly of section .text:
   40254e:	c5 f8 28 05 7a 1e 00 	vmovaps 0x1e7a(%rip),%xmm0        # 4043d0 <_IO_stdin_used+0x3d0>
   402555:	00 
   402556:	c4 c1 78 11 46 20    	vmovups %xmm0,0x20(%r14)
-  40255c:	49 c7 86 00 40 00 00 	movq   $0x1fffff,0x4000(%r14)
-  402563:	ff ff 1f 00 
-  402567:	c4 e2 7d 18 05 94 1a 	vbroadcastss 0x1a94(%rip),%ymm0        # 404004 <_IO_stdin_used+0x4>
-  40256e:	00 00 
-  402570:	c4 c1 7c 29 86 40 30 	vmovaps %ymm0,0x3040(%r14)
-  402577:	00 00 
-  402579:	48 89 df             	mov    %rbx,%rdi
-  40257c:	c5 f8 77             	vzeroupper
-  40257f:	e8 ac ef ff ff       	call   401530 <__$cleanup_runtime>
-  402584:	31 c0                	xor    %eax,%eax
-  402586:	48 83 c4 78          	add    $0x78,%rsp
-  40258a:	5b                   	pop    %rbx
-  40258b:	41 5e                	pop    %r14
-  40258d:	c3                   	ret
-  40258e:	bf 18 42 40 00       	mov    $0x404218,%edi
-  402593:	be 2a 00 00 00       	mov    $0x2a,%esi
-  402598:	ba 36 00 00 00       	mov    $0x36,%edx
-  40259d:	b9 11 00 00 00       	mov    $0x11,%ecx
-  4025a2:	45 31 c0             	xor    %r8d,%r8d
-  4025a5:	e8 96 eb ff ff       	call   401140 <runtime::multi_pointer_slice_handle_error>
-  4025aa:	66 0f 1f 44 00 00    	nopw   0x0(%rax,%rax,1)
+  40255c:	49 89 86 00 40 00 00 	mov    %rax,0x4000(%r14)
+  402563:	c4 e2 7d 18 05 98 1a 	vbroadcastss 0x1a98(%rip),%ymm0        # 404004 <_IO_stdin_used+0x4>
+  40256a:	00 00 
+  40256c:	c4 c1 7c 29 86 40 30 	vmovaps %ymm0,0x3040(%r14)
+  402573:	00 00 
+  402575:	48 89 df             	mov    %rbx,%rdi
+  402578:	c5 f8 77             	vzeroupper
+  40257b:	e8 b0 ef ff ff       	call   401530 <__$cleanup_runtime>
+  402580:	31 c0                	xor    %eax,%eax
+  402582:	48 83 c4 78          	add    $0x78,%rsp
+  402586:	5b                   	pop    %rbx
+  402587:	41 5e                	pop    %r14
+  402589:	c3                   	ret
+  40258a:	bf 18 42 40 00       	mov    $0x404218,%edi
+  40258f:	be 2a 00 00 00       	mov    $0x2a,%esi
+  402594:	ba 36 00 00 00       	mov    $0x36,%edx
+  402599:	b9 11 00 00 00       	mov    $0x11,%ecx
+  40259e:	45 31 c0             	xor    %r8d,%r8d
+  4025a1:	e8 9a eb ff ff       	call   401140 <runtime::multi_pointer_slice_handle_error>
+  4025a6:	66 2e 0f 1f 84 00 00 	cs nopw 0x0(%rax,%rax,1)
+  4025ad:	00 00 00 
 
 00000000004025b0 <runtime::print_string>:
   4025b0:	48 89 f2             	mov    %rsi,%rdx

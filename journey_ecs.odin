@@ -654,7 +654,7 @@ from the predicate will be the same for each run
 
 
 build_sym_predicate :: proc($data_typeid : typeid, $field_name : string, $cmp_op : ComparisionOperation, val : ^$N, $comb_op : CombinatorOperation) -> SystemPredicate
-where intrinsics.type_is_struct(data_typeid){
+where intrinsics.type_is_struct(data_typeid) && (intrinsics.type_is_float(N) || intrinsics.type_is_integer(N)) && intrinsics.type_field_type(data_typeid, field_name) == N{
     FIELD_OFFSET : WORD : WORD(intrinsics.type_field_index_of(data_typeid, field_name))
     FIELD_TYPE : typeid : intrinsics.type_field_type(data_typeid, field_name)
     FIELD_COUNT : WORD : intrinsics.type_struct_field_count(data_typeid)
@@ -698,45 +698,19 @@ where intrinsics.type_is_struct(data_typeid){
 
 		offset_bytes = size_of(FIELD_TYPE) * LANE_COUNT * FIELD_OFFSET
 	}
-
-
-	return {
-		transmute(QWORD)val,//This should be holding a handle.
-		offset_bytes,
-		STRIDE_BYTES,
-		0,
-		cmp_op,
-		comb_op,
-
-	}
-
-
-
-
-
-
-
-
     }
 
-    
-
-    //We will assume that it is YMM register
-    
-
-
-
-
-
-
-
-    //fmt.println(FIELD_OFFSET, size_of(FIELD_TYPE))
-
-
+    return {
+	transmute(QWORD)val,
+	offset_bytes,
+	STRIDE_BYTES,
+	0,
+	cmp_op,
+	comb_op,
+    }
     
     
     
-    return {}
 }
 
 @(optimization_mode="favor_size")
@@ -795,9 +769,7 @@ update :: proc(){
      
      //Register (NPC) Position "component" in the world. 
      register_columnar(&world, Position, NPC_POSITION_STORAGE_INDEX, 21, 300)
-
-     
-     register_columnar(&world, Position,2, 0, 1)
+     register_columnar(&world, Position,ENEMY_POSITION_STORAGE_INDEX, 0, 19)
      
      readjust_npc_position :: proc "contextless" (buf : [^]BYTE, meta : DataMeta){
          data : [^]#soa[8]Position = transmute([^]#soa[8]Position)buf
