@@ -3,11 +3,13 @@ package journey
 
 import "base:intrinsics"
 import "core:sys/linux"
+import "base:runtime"
+
 
 //Debug use
 import "core:fmt"
 import "core:strings"
-import "base:runtime"
+
 /*
    What is the problem (informal):
    - We want to figure out a way to organize entity's components in a way where it is possible to always read/write from a full cache line and use all of it.
@@ -286,11 +288,15 @@ ComparisionOperation :: enum BYTE{
     IN,
 }
 
+
 SystemPredicate :: struct{
-    val : QWORD,
+    value_handle : QWORD,
     byte_offset : WORD,
+    byte_stride : WORD,
+    padding_0 : WORD,
     cmp_op : ComparisionOperation,
     combinator_op : CombinatorOperation,
+
 }
 
 
@@ -646,9 +652,85 @@ from the predicate will be the same for each run
 
 */
 
-build_sym_predicate :: proc($data_type : typeid, $field_name : string, $cmp_op : ComparisionOperation, val : $N, $comb_op : CombinatorOperation) -> SystemPredicate{
-    FIELD_OFFSET : uintptr : intrinsics.type_field_index_of(data_type, field_name)
-    FIELD_TYPE : typeid : intrinsics.type_field_type(data_type, field_name)
+
+build_sym_predicate :: proc($data_typeid : typeid, $field_name : string, $cmp_op : ComparisionOperation, val : ^$N, $comb_op : CombinatorOperation) -> SystemPredicate
+where intrinsics.type_is_struct(data_typeid){
+    FIELD_OFFSET : WORD : WORD(intrinsics.type_field_index_of(data_typeid, field_name))
+    FIELD_TYPE : typeid : intrinsics.type_field_type(data_typeid, field_name)
+    FIELD_COUNT : WORD : intrinsics.type_struct_field_count(data_typeid)
+
+    offset_bytes : WORD  = 0
+
+    when intrinsics.type_struct_has_implicit_padding(data_typeid){
+	    LANE_COUNT : WORD : 1
+    }else{
+        FIELD_IS_UNIFORM : bool : (align_of(data_typeid) * intrinsics.type_struct_field_count(data_typeid)) == size_of(data_typeid)
+        
+        when FIELD_IS_UNIFORM{
+            ELEMENT_SIZE : DWORD : size_of(data_typeid) / intrinsics.type_struct_field_count(data_typeid)
+
+            //We are currently using YMM SIMD 256
+            when ELEMENT_SIZE == 8{
+		    LANE_COUNT : WORD : 4
+            }else when ELEMENT_SIZE == 4{
+		    LANE_COUNT : WORD : 8
+            }else {
+		    LANE_COUNT : WORD : 1
+            }
+            
+        }else{
+		LANE_COUNT : WORD : 1
+        }
+
+	STRIDE_BYTES : WORD : (size_of(data_typeid) * LANE_COUNT) - (size_of(FIELD_TYPE) * LANE_COUNT)
+
+	when FIELD_OFFSET > 0 && LANE_COUNT == 1{
+		base_info : ^runtime.Type_Info = ---
+		struct_info : runtime.Type_Info_Struct = ---
+
+		base_info = type_info_of(data_typeid).variant.(runtime.Type_Info_Named).base
+		struct_info = base_info.variant.(runtime.Type_Info_Struct)
+
+		for i in 0..<FIELD_OFFSET{
+			offset_bytes += struct_info.types[i].size
+		}
+	}else{
+
+		offset_bytes = size_of(FIELD_TYPE) * LANE_COUNT * FIELD_OFFSET
+	}
+
+
+	return {
+		transmute(QWORD)val,//This should be holding a handle.
+		offset_bytes,
+		STRIDE_BYTES,
+		0,
+		cmp_op,
+		comb_op,
+
+	}
+
+
+
+
+
+
+
+
+    }
+
+    
+
+    //We will assume that it is YMM register
+    
+
+
+
+
+
+
+
+    //fmt.println(FIELD_OFFSET, size_of(FIELD_TYPE))
 
 
     
@@ -660,6 +742,7 @@ build_sym_predicate :: proc($data_type : typeid, $field_name : string, $cmp_op :
 @(optimization_mode="favor_size")
 run_0 :: proc  (world : ^World($thread_count), $table_index : QWORD, thread_index : QWORD, sysm : sysm_proc, predicates : ..SystemPredicate)
 {
+
 
     
     
@@ -699,10 +782,11 @@ update :: proc(){
      Position :: struct{
          x : f32,
          y : f32,
+	 z : f32
      }
 
      
-     player_position : Position = {5, 7}
+     player_position : Position = {5, 7, 2}
      player_health : Health = {100}
 
   	 world : World(4) = ---
@@ -724,8 +808,8 @@ update :: proc(){
          
      }
 
-     npc_pos_overlapping_x := build_sym_predicate(Position, "x", .EQ, player_position.x, .OR)
-     npc_pos_overlapping_y := build_sym_predicate(Position, "y", .EQ, player_position.y, .NIL)
+     npc_pos_overlapping_x := build_sym_predicate(Position, "x", .EQ, &player_position.x, .OR)
+     npc_pos_overlapping_y := build_sym_predicate(Position, "y", .EQ, &player_position.y, .NIL)
 
      //This system will run for all the npc positions only if the player position is overlapping (either x or y) 
      run_0(&world, NPC_POSITION_STORAGE_INDEX, SECOND_THREAD, readjust_npc_position, npc_pos_overlapping_x, npc_pos_overlapping_y)

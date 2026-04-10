@@ -32,8 +32,8 @@ L3_ASSOC=$(cat /sys/devices/system/cpu/cpu0/cache/index3/ways_of_associativity)
 
 odin build journey_ecs.odin -file -debug -out:main-debug.bin
 odin build journey_ecs.odin -file -o:size -microarch:native -out:main-release.bin
-objdump -d ~/Documents/GitHub/Journey_ECS/main-debug.bin > $SCRIPT_DIR/assembly_dump-debug.asm
-objdump -d ~/Documents/GitHub/Journey_ECS/main-release.bin > $SCRIPT_DIR/assembly_dump-release.asm
+objdump -d $SCRIPT_DIR/main-debug.bin > $SCRIPT_DIR/assembly_dump-debug.asm
+objdump -d $SCRIPT_DIR/main-release.bin > $SCRIPT_DIR/assembly_dump-release.asm
 
 odin build journey_ecs.odin -file -debug -build-mode:llvm-ir
 
