@@ -598,6 +598,247 @@ where intrinsics.type_is_struct(data_typeid) && end > start && thread_count <= 4
 }
 
 
+
+
+brief informal statement of the problem:
+We need to support filtering multiple instances of a single component type based on their fields or flags  
+
+System level issue:
+Filtering instances of a single component type based on a specific field can be expensive due data layout requiring you to load more data than is required by the filter predicate, which
+increases the cost even more as the filter complexity increases.
+
+
+What must be controlled:
+
+Even though we can't control data layout for user defined components. We must control how the data layout of the components is stored in memory,
+since filtering multiple instances of a single component can be one of the major bottleneck due to data access inefficiencies.
+
+We must control layout and the system of all the filter in a way to eliminate all contradictions, redundancy, and possibly merge filters together to reduce
+the number of passes. The sorting order of the filters must be controlled as well, since it will reduce data access and improve early rejections. 
+
+contradiction -> the work (if a > 5 && a < 5)
+redundancy -> unnecessary work (if a > 5 && a > 4)
+merging -> reduce repeatable data access
+ordering -> reduce unnecessary data access
+
+Even though we can't control the filter evaluation, since it is dynamic and dependent on the user defined data and transformation
+We must manage how control flow is handled to reduce divergences during evaluation to increase predicatability and overall performance (plus maintainability/readability).   
+
+
+
+Latency/Throughput targets:
+
+/////////MEMORY//////////
+
+ram base clock frequency
+
+3000 mts
+3200 mts
+3600 mts
+
+Bandwidth (upper bound ignoring timing limitation)
+3_000_000_000 * 64 bit_lane * 2 (dual_channel) = 384_000_000_000 bits or 48_000_000_000 byte per sec (384 gbps or 48GB/s)
+3_200_000_000 * 64 * 2 = 409_600_000_000 bits or 51_200_000_000 bytes per sec (409.6 gbps or 51.2 GB/s)
+3_600_000_000 * 64 * 2 = 460_800_000_000 bits or 57_600_000_000 bytes per sec (460.8 gbps 57.6 GB/s)
+
+
+(upper bound)
+
+3000 mts
+
+12_000_000_000 struct_per_sec = 48_000_000_000 bytes / 4 bytes (single field struct DWORD/SINGLE)
+6_000_000_000 struct_per_sec = 48_000_000_000 bytes / 8 bytes (single field struct QWORD/DOUBLE)
+
+200_000_000 4_bytes_struct_per_60_fps = 12_000_000_000 * (1/60)
+100_000_000 8_bytes_struct_per_60_fps = 6_000_000_000 * (1/60)
+
+83_333_333 4_bytes_struct_per_144_fps = 12_000_000_000 * (1/144)
+41_666_666 8_bytes_struct_per_144_fps = 6_000_000_000 * (1/144)
+
+50_000_000 4_bytes_struct_per_240_fps = 12_000_000_000 * (1/240)
+25_000_000 8_bytes_struct_per_240_fps = 6_000_000_000 * (1/240)
+
+////////
+
+3200 mts
+
+
+12_800_000_000 struct_per_sec = 51_200_000_000 bytes / 4 bytes (single field struct DWORD/SINGLE)
+6_400_000_000 struct_per_sec = 51_200_000_000 bytes / 8 bytes (single field struct QWORD/DOUBLE)
+
+213_333_333 4_bytes_struct_per_60_fps = 12_800_000_000 * (1/60)
+106_666_666 8_bytes_struct_per_60_fps = 6_400_000_000 * (1/60)
+
+88_888_888 4_bytes_struct_per_144_fps = 12_800_000_000 * (1/144)
+44_444_444 8_bytes_struct_per_144_fps = 6_400_000_000 * (1/144)
+
+53_333_333 4_bytes_struct_per_240_fps = 12_800_000_000 * (1/240)
+26_666_666 8_bytes_struct_per_240_fps = 6_400_000_000 * (1/240)
+
+
+////////
+
+3600 mts
+
+14_400_000_000 struct_per_sec = 57_600_000_000 bytes / 4 bytes (single field struct DWORD/SINGLE)
+7_200_000_000 struct_per_sec = 57_600_000_000 bytes / 8 bytes (single field struct QWORD/DOUBLE)
+
+240_000_000 4_bytes_struct_per_60_fps = 14_400_000_000 * (1/60)
+120_000_000 8_bytes_struct_per_60_fps = 7_200_000_000 * (1/60)
+
+100_000_000 4_bytes_struct_per_144_fps = 14_400_000_000 * (1/144)
+50_000_000 8_bytes_struct_per_144_fps = 7_200_000_000 * (1/144)
+
+60_000_000 4_bytes_struct_per_240_fps = 14_400_000_000 * (1/240)
+30_000_000 8_bytes_struct_per_240_fps = 7_200_000_000 * (1/240)
+
+////////
+
+
+We will target 3200 mts as the medium and the range of fps will be 144 to 240
+so 
+
+88_888_888 4_bytes_struct_per_144_fps = 12_800_000_000 * (1/144)
+44_444_444 8_bytes_struct_per_144_fps = 6_400_000_000 * (1/144)
+
+53_333_333 4_bytes_struct_per_240_fps = 12_800_000_000 * (1/240)
+26_666_666 8_bytes_struct_per_240_fps = 6_400_000_000 * (1/240)
+
+or for 64 bytes struct
+
+5_555_555 cache_line_struct_per_144_fps
+3_333_333 cache_line_struct_per_240_fps
+
+is our theoretical limit
+
+We are using testingmlp to get our ram latency which is 102.2 ns so the range we will use is +-10
+from 92.2 to 112.2 ns latency
+
+Around 16 MLP (memory level parallelism) is when the scaling start to diminish from # of lanes 
+
+so pointer chasing (memory load dependency) = (MLP * cacheline) / latency
+range(11.1, 9.12), = (16 * 64 bytes) / range(92.2 ns, 112.2 ns) 
+
+so roughly 11.1 gbps to 9.12 gbps is the limit for pointer chasing (memory load dependency)
+
+2_775_000_000 4_bytes_struct_per_second = 11_100_000_000 bytes / 4 bytes (single field struct DWORD/SINGLE)
+1_387_500_000 8_bytes_struct_per_second = 11_100_000_000 bytes / 8 bytes (single field struct QWORD/DOUBLE)
+
+19_270_833 4_bytes_struct_per_144_fps = 2_775_000_000 * (1/144)
+9_635_416 8_bytes_struct_per_144_fps = 1_387_500_000 * (1/144)
+
+11_562_500 4_bytes_struct_per_240_fps = 2_775_000_000 * (1/240)
+5_781_250 8_bytes_struct_per_240_fps = 1_387_500_000 * (1/240)
+
+2_280_000_000 4_bytes_struct_per_second = 9_120_000_000 bytes / 4 bytes (single field struct DWORD/SINGLE)
+1_140_000_000 8_bytes_struct_per_second = 9_120_000_000 bytes / 8 bytes (single field struct QWORD/DOUBLE)
+
+
+from 48, 51.2, 57.6 GB/s depending on 3000 mts, 3200 mts or 3600 mts to 9.12 GIB/s to 11.1 GIB/s
+
+It looks like 6.5GIB/s is our limit when doing a simd load and store using memcpy of 1 GIB of cold data
+but without the temporal we can only achieve 4 GIB/s so we will use this as our limit to handle worst case
+
+We achieve this with 4 xmm load, store or 2 ymm load, store.
+This look correct since our target is 9.12 GIB/s to 11.1 GIB/s and the operation we are doing is
+1 load from dst, 1 load from src, and 1 store from dst
+
+so 9.12 GIB/s / 3 memory operation and 11.1 GIB/s / 3 memory operation, which will be 3.04 GIB/s to 3.7 GIB/s
+
+so we will have a lower limit this is loading 2 data, and writing it to another data this will be
+3.04 GIB/s to 3.7 GIB/s 
+
+for just loading two 1GIB buffer in any predicatable offset we get 6 GIB/s as the number of different buffer grows
+the 6 GIB/s start decreasing 
+
+for just loading one 1GIB buffer in sequential order we get around 14.4 GIB/s to 13.37 GIB/s
+
+This is the model that fits for my PC
+
+The lower bound is 3.04 to 3.7 GIB/s for load buffer, load diff buffer, store (Write heavy)
+Fair bound is 4.0 to 5.0 GIB/s for loading 3 to 6 buffer and minimal store
+Ideal bound is 6.0 to 7.0 GIB/s for loading 2 buffer and minimal store
+High bound is 13.37 to 14.4 GIB/s for loading 1 buffer and accessing it in sequence (no store) 
+
+
+/////////CACHE//////////
+
+//TODO:Khal add Cache bench and write low and high bounds and target
+
+
+
+/////////TLB//////////
+
+//TODO:Khal add TLB bench and write low and high bounds and target
+
+/////////INSTRUCTION//////////
+
+//TODO:Khal add Instruction bench and write low and high bounds and target
+
+
+
+build_sym_predicate :: proc($data_typeid : typeid, $field_name : string, $cmp_op : ComparisionOperation, val : ^$N, $comb_op : CombinatorOperation, sysm_predicate : ^SystemPredicate)
+where intrinsics.type_is_struct(data_typeid) && (intrinsics.type_is_float(N) || intrinsics.type_is_integer(N)) && intrinsics.type_field_type(data_typeid, field_name) == N{
+    FIELD_OFFSET : WORD : WORD(intrinsics.type_field_index_of(data_typeid, field_name))
+    FIELD_TYPE : typeid : intrinsics.type_field_type(data_typeid, field_name)
+    FIELD_COUNT : WORD : intrinsics.type_struct_field_count(data_typeid)
+
+    offset_bytes : WORD  = 0
+    
+    when intrinsics.type_struct_has_implicit_padding(data_typeid){
+	    LANE_COUNT : WORD : 1
+    }else{
+        FIELD_IS_UNIFORM : bool : (align_of(data_typeid) * intrinsics.type_struct_field_count(data_typeid)) == size_of(data_typeid)
+        
+        when FIELD_IS_UNIFORM{
+            ELEMENT_SIZE : DWORD : size_of(data_typeid) / intrinsics.type_struct_field_count(data_typeid)
+
+            //We are currently using YMM SIMD 256
+            when ELEMENT_SIZE == 8{
+		    LANE_COUNT : WORD : 4
+            }else when ELEMENT_SIZE == 4{
+		    LANE_COUNT : WORD : 8
+            }else {
+		    LANE_COUNT : WORD : 1
+            }
+            
+        }else{
+		LANE_COUNT : WORD : 1
+        }
+
+	STRIDE_BYTES : WORD : (size_of(data_typeid) * LANE_COUNT) - (size_of(FIELD_TYPE) * LANE_COUNT)
+
+	when FIELD_OFFSET > 0 && LANE_COUNT == 1{
+		base_info : ^runtime.Type_Info = ---
+		struct_info : runtime.Type_Info_Struct = ---
+
+		base_info = type_info_of(data_typeid).variant.(runtime.Type_Info_Named).base
+		struct_info = base_info.variant.(runtime.Type_Info_Struct)
+
+		for i in 0..<FIELD_OFFSET{
+			offset_bytes += struct_info.types[i].size
+		}
+	}else{
+
+		offset_bytes = size_of(FIELD_TYPE) * LANE_COUNT * FIELD_OFFSET
+	}
+    }
+    
+    sysm_predicate^ = {
+	transmute(QWORD)val,
+	offset_bytes,
+	STRIDE_BYTES,
+	0,
+	cmp_op,
+	comb_op,
+    }
+    
+    
+    
+}
+
+
+
 /*
 Brief Problem we are trying to solve:
 
@@ -651,67 +892,6 @@ from the predicate will be the same for each run
 
 
 */
-
-
-build_sym_predicate :: proc($data_typeid : typeid, $field_name : string, $cmp_op : ComparisionOperation, val : ^$N, $comb_op : CombinatorOperation) -> SystemPredicate
-where intrinsics.type_is_struct(data_typeid) && (intrinsics.type_is_float(N) || intrinsics.type_is_integer(N)) && intrinsics.type_field_type(data_typeid, field_name) == N{
-    FIELD_OFFSET : WORD : WORD(intrinsics.type_field_index_of(data_typeid, field_name))
-    FIELD_TYPE : typeid : intrinsics.type_field_type(data_typeid, field_name)
-    FIELD_COUNT : WORD : intrinsics.type_struct_field_count(data_typeid)
-
-    offset_bytes : WORD  = 0
-
-    when intrinsics.type_struct_has_implicit_padding(data_typeid){
-	    LANE_COUNT : WORD : 1
-    }else{
-        FIELD_IS_UNIFORM : bool : (align_of(data_typeid) * intrinsics.type_struct_field_count(data_typeid)) == size_of(data_typeid)
-        
-        when FIELD_IS_UNIFORM{
-            ELEMENT_SIZE : DWORD : size_of(data_typeid) / intrinsics.type_struct_field_count(data_typeid)
-
-            //We are currently using YMM SIMD 256
-            when ELEMENT_SIZE == 8{
-		    LANE_COUNT : WORD : 4
-            }else when ELEMENT_SIZE == 4{
-		    LANE_COUNT : WORD : 8
-            }else {
-		    LANE_COUNT : WORD : 1
-            }
-            
-        }else{
-		LANE_COUNT : WORD : 1
-        }
-
-	STRIDE_BYTES : WORD : (size_of(data_typeid) * LANE_COUNT) - (size_of(FIELD_TYPE) * LANE_COUNT)
-
-	when FIELD_OFFSET > 0 && LANE_COUNT == 1{
-		base_info : ^runtime.Type_Info = ---
-		struct_info : runtime.Type_Info_Struct = ---
-
-		base_info = type_info_of(data_typeid).variant.(runtime.Type_Info_Named).base
-		struct_info = base_info.variant.(runtime.Type_Info_Struct)
-
-		for i in 0..<FIELD_OFFSET{
-			offset_bytes += struct_info.types[i].size
-		}
-	}else{
-
-		offset_bytes = size_of(FIELD_TYPE) * LANE_COUNT * FIELD_OFFSET
-	}
-    }
-
-    return {
-	transmute(QWORD)val,
-	offset_bytes,
-	STRIDE_BYTES,
-	0,
-	cmp_op,
-	comb_op,
-    }
-    
-    
-    
-}
 
 @(optimization_mode="favor_size")
 run_0 :: proc  (world : ^World($thread_count), $table_index : QWORD, thread_index : QWORD, sysm : sysm_proc, predicates : ..SystemPredicate)
@@ -780,8 +960,10 @@ update :: proc(){
          
      }
 
-     npc_pos_overlapping_x := build_sym_predicate(Position, "x", .EQ, &player_position.x, .OR)
-     npc_pos_overlapping_y := build_sym_predicate(Position, "y", .EQ, &player_position.y, .NIL)
+     npc_pos_overlapping_x : SystemPredicate
+     build_sym_predicate(Position, "x", .EQ, &player_position.x, .OR, &npc_pos_overlapping_x)
+     npc_pos_overlapping_y : SystemPredicate 
+     build_sym_predicate(Position, "y", .EQ, &player_position.y, .NIL, &npc_pos_overlapping_y)
 
      //This system will run for all the npc positions only if the player position is overlapping (either x or y) 
      run_0(&world, NPC_POSITION_STORAGE_INDEX, SECOND_THREAD, readjust_npc_position, npc_pos_overlapping_x, npc_pos_overlapping_y)
@@ -792,7 +974,170 @@ update :: proc(){
      }
 
 
-     //Maybe add a free list to handle "remove" indices from the blob.
+     bench_proc :: #type proc "contextless" (dst : [^]BYTE, src : [^]BYTE, size : QWORD) 
+     
+     ksize :: 1 << 30
+     kcount :: 8
+
+     src:= transmute([^]BYTE)intrinsics.syscall(
+            linux.SYS_mmap,
+            0x00,
+            uintptr(ksize),
+            uintptr(0x03),
+            uintptr(0x21),
+            ~uintptr(0),
+            uintptr(0),
+        )
+
+
+     dst := transmute([^]BYTE)intrinsics.syscall(
+            linux.SYS_mmap,
+            0x00,
+            uintptr(ksize),
+            uintptr(0x03),
+            uintptr(0x21),
+            ~uintptr(0),
+            uintptr(0),
+        )
+
+
+
+     GetTick :: proc() -> QWORD{
+         ts,_ := linux.clock_gettime(.MONOTONIC)
+         return QWORD(ts.time_sec * 1000000000 + ts.time_nsec)
+
+     }
+
+
+     GetFreq ::proc() -> QWORD{
+         return 1000000000
+     }
+
+
+     memcpy_simple :: proc "contextless" (dst : [^]BYTE, src : [^]BYTE, size : QWORD){
+         intrinsics.mem_copy(dst,src,int(size))
+
+     }
+
+
+    memcpy_non_overlap :: proc "contextless" (dst : [^]BYTE, src : [^]BYTE, size : QWORD){
+         intrinsics.mem_copy_non_overlapping(dst,src,int(size))
+
+     }
+
+@(enable_target_feature="avx,avx2")
+copy_unroll :: proc "contextless" (#no_alias dst, src: [^]BYTE, size: QWORD, $UNROLL: QWORD) {
+    dstv := transmute([^]#simd[8]f32)dst
+    srcv := transmute([^]#simd[8]f32)src
+
+    vec_count := size / size_of(#simd[8]f32)
+
+    //We are doing 16 because our MLP is 16ish
+    t1 : #simd[8]f32 = ---
+    t2 : #simd[8]f32 = ---
+    t3 : #simd[8]f32 = ---
+    t4 : #simd[8]f32 = ---
+    t5 : #simd[8]f32 = ---
+    t6 : #simd[8]f32 = ---
+    t7 : #simd[8]f32 = ---
+    t8 : #simd[8]f32 = ---
+    t9 : #simd[8]f32 = ---
+    t10 : #simd[8]f32 = ---
+    t11 : #simd[8]f32 = ---
+    t12 : #simd[8]f32 = ---
+    t13 : #simd[8]f32 = ---
+    t14 : #simd[8]f32 = ---
+    t15 : #simd[8]f32 = ---
+    t16 : #simd[8]f32 = ---
+    for i :QWORD= 0; i + 15 < vec_count; i+=16{
+
+            t1 = dstv[i]
+            t2 = dstv[i+1]
+
+            t3 = dstv[i+2]
+            t4 = dstv[i+3]
+
+            t5 = dstv[i+4]
+            t6 = dstv[i+5]
+        
+            t7 = dstv[i+6]
+            t8 = dstv[i+7]
+        
+            t9 = srcv[i]
+            t10 = srcv[i+1]
+        
+            t11 = srcv[i+2]
+            t12 = srcv[i+3]
+        
+            t13 = srcv[i+4]
+            t14 = srcv[i+5]
+        
+            t15 = srcv[i+6]
+            t16 = srcv[i+7]
+    }
+    f := (t1+t2)+(t3+t4)+(t5+t6)+(t7+t8)+(t9+t10)+(t11+t12)+(t13+t14)+(t15+t16)
+}
+//
+// ===== Wrappers for 2 → 16 =====
+//
+
+copy_4  :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,4) }
+copy_8  :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,8) }
+copy_16  :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,16) }
+copy_32 :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,32) }
+copy_64 :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,64) }    
+     warm_up :: proc(dst : [^]BYTE, src : [^]BYTE, size : QWORD){
+
+         for i:QWORD =0; i < size; i += 64{
+             dst[i] = 4
+             src[i] = 2
+         }
+
+     }
+     
+     
+     bench :: proc(dst : [^]BYTE, src : [^]BYTE, $size : QWORD, bench : bench_proc){
+
+         t1 := GetTick()
+         for size in 0..<kcount{
+             bench(dst,src,ksize)
+         }
+         
+         t2 := GetTick()
+         seconds := f64(t2-t1)/ f64(GetFreq())
+
+         bytes := f64(ksize * kcount)
+         gib   := bytes / (1024.0 * 1024.0 * 1024.0)
+         bw    := gib / seconds
+
+         
+         fmt.printf("%.30f GIB/s \n",bw)
+     }
+
+     warm_up(dst,src, ksize)
+     fmt.println("simple memmove")
+     bench(dst,src,ksize, memcpy_simple)
+     fmt.println("simple memcpy")
+     bench(dst,src,ksize, memcpy_non_overlap)
+     
+     fmt.println("avx 2 load store 4 unroll")
+     bench(dst,src,ksize, copy_4)
+     
+     fmt.println("avx 2 load store 8 unroll")
+     bench(dst,src,ksize, copy_8)
+
+
+     fmt.println("avx 2 load store 16 unroll")
+     bench(dst,src,ksize, copy_16)
+
+
+     fmt.println("avx 2 load store 32 unroll")
+     bench(dst,src,ksize, copy_32)
+
+
+     fmt.println("avx 2 load store 64 unroll")
+     bench(dst,src,ksize, copy_64)
+      //Maybe add a free list to handle "remove" indices from the blob.
      
 
      //TODO:Khal Procedure to work on:
