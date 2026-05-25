@@ -599,7 +599,7 @@ where intrinsics.type_is_struct(data_typeid) && end > start && thread_count <= 4
 
 
 
-
+/*
 brief informal statement of the problem:
 We need to support filtering multiple instances of a single component type based on their fields or flags  
 
@@ -762,20 +762,145 @@ High bound is 13.37 to 14.4 GIB/s for loading 1 buffer and accessing it in seque
 
 
 /////////CACHE//////////
+ws      cpu clock
+64    	80
+128	    30
+256     60
+512 	60
+1024	90
+2048	101
+4096	140
+8192	371
+16384	391
 
-//TODO:Khal add Cache bench and write low and high bounds and target
+There seem to be noise from 64 to 16KIB but when we get to 32KIB to RAM there seem to be an average of 2.5 times increase on the cpu clock
+compared to 1.3 (There is noise so this should be a lot less)
+
+Cpu start degrading fron 4096 to 8192 and a steady 2.0x after 16KIB. until we reach memory access which is closely to 3.0x 
+
+When there is an L3 hit, the line is invalidated from
+the L3 if the access was a store. It is invalidated from the L3 if the access was a load and the line was
+read by just one core.
+
+So we won't really rely on the L3 cache, but rather L1 and L2 cache in this guideline
+
+We know the fetch rate from L1 to L2 cache is 32 bytes per cycle,
+
+Most cpu l1 data cache is 32KIB, 8 ways, 64 set. This is an assumption that we will believe
+So we can use any of the 8 lanes  of cache line, but only one of the particular 64 set can be used for storing the memory
+So if each set there is 8 "lanes" and in each line is a cache line. to determine the set it is ((address / cache line) % number of set)
+
+to find the critical stride we will do critical_stride = total_cache_size / number_of_ways
+
+If we use the L1 data cache and assume it is 32KIB, 8 ways, 64 set for l1 data cache. Than the critical stride would be
+(32 * 1024) / 8 == 4096 bytes. This is exactly a page size. We also know that in each set there are 8 ways and in each way it hold 1 cache line
+so we can do 8 page size before it start to evict anything from the l1 data cache (this is assuming there isn't any other data loaded or stored)
+
+If we use the L2 cache and assume it is 512KIB, 8 ways, 1024 set for the L2 cache. Than the critical stride would be
+(512 * 1024) / 8 == 65536 bytes. This is exactly 16 times the page size. We also know that in each set there is 8 ways and in each way it hold 1 cache line
+so we can do 128 page size before it start evicting (This is assuming there is no instruction cached in the L2 cache and it is empty)
+
+iteration test
+Way	microseconds
+1	115.797
+2	76.753
+4	56.806
+8	51.846
+16	74.71
+32	83.285
+64	84.157
+128 261.762
+256 435.729
+512 817.687
+
+For each 64 bytes it is stored in a set. Which mean 64 is stored in set 0, 128 in set 1, 192 in set 3, etc....
+If we use let say only set 0 and not any other set by saturating the ways then we are under utilizing the cache.
+This can be caused by having critcal stride offset.
+
+Ideally the solution to the problem (filtering) shouldn't cause alot of contention to the cpu cache, so cache eviction and contention
+should be avoid by using all fields in the data sequentially and multiple times. The repacked layout of the data we are trying to filter must not 
+cause large strides when filtering. From single filter on single fields, multiple fiters on single field, multiple filters on multiple fields.
+
+AMD l1 data cache is most likely VIPT (Virtually indexed, physically tagged) meaning that the set and the individual data in cache is fetched using virtual address, but the tag
+to determine the specific cache in the set (which way in the set) uses the physical address rather than the virtual address.
+
+Following layout AMD representation on how the address is used to access the cache
+
+[Tag field,    Index field,    Offset field]
+
+The offset field is used to index into the cache line and we will assume the cache line is 64 bytes, so the offset field can't be greater than
+6 bits (1 << 6) == 64
+
+The index field is used to get the set index in the cache. We will assume the number of set in a l1 data cache is 64 set (zen1 to zen3)
+so the Index field should be greater than 64. This can be captured by 1 << 6
+
+[Tag field, Index field (6 bits), Offset field (6 bits)]
+
+This also show why critical_stride = total_cache_size / number_of_ways  will map the the same set.
+
+Which DC banks are accessed is determined by address bits 5:3 (multiple load or store in the same bank is not good)
+
+[Tag field, Index field (6 bits),  Bank(5:3) normal offset (2:0)   Offset field (6 bits)]
+
+We can assume AMD cpu contains the following type of HW prefetchers;
+L1 Stream HW Prefetcher L1 Stride Prefetcher  L1 Region Prefetcher  L2 Stream HW Prefetcher L2 up/Down Prefetcher
+
+This means that accessing data sequentially and in constant stride is good in the l1 data cache.
+We can assume that hardware prefetching stop at page boundaries (this is an assumption), so trying to cross a page boundaries
+will have a cache miss if the data isn't already in the cache. We can track 24 outstanding cache miss from l1 data cache (zen3) and
+22 outstanding cache miss from l1 data cache (zen2)
+
+NOTE should we just make the lane size size_of(type) * LANE == 64 bytes? so if we fiter or use a single field type than we are
+using a full cache line. We can do two ymm0 load by smashing them. Intsead of size_of(type) * lane_count == 32 byte if ymm0 or size_of(type) * lane_count == 16 bytes if xmm
+
+Lower bound is 
+Fair bound is
+Ideal bound is
+High bound is 
 
 
 
 /////////TLB//////////
 
 //TODO:Khal add TLB bench and write low and high bounds and target
+//would hardware prefetch stall if it there a prefetch and it is not in the tlb?
+
+
+
+
 
 /////////INSTRUCTION//////////
 
+Zen 3 CPU int unit path:
+3 ALU
+1 ALU BR
+
+3 AGU
+
+1 BR
+
+Zen 3 CPU float unit path:
+MUL MAC
+ADD
+MUL MAC
+ADD
+
+F2I ST
+F2I ST
+
+So we can issue a maximum of 6 instruction per cycle due to dispatch
+
+1 jump maximum per 16 code bytes 
+
+loop counter <= 64
+
 //TODO:Khal add Instruction bench and write low and high bounds and target
 
-
+max displacement is 32 bits (DWORD)
+it looks like most of the instruction immediate only work for i8, i16, and i32
+would branching reduce how good the harware will prefetch for the instruction cache?
+For most instructions, the default operand size in 64-bit mode is 32 bits
+*/
 
 build_sym_predicate :: proc($data_typeid : typeid, $field_name : string, $cmp_op : ComparisionOperation, val : ^$N, $comb_op : CombinatorOperation, sysm_predicate : ^SystemPredicate)
 where intrinsics.type_is_struct(data_typeid) && (intrinsics.type_is_float(N) || intrinsics.type_is_integer(N)) && intrinsics.type_field_type(data_typeid, field_name) == N{
@@ -916,7 +1041,8 @@ update :: proc(){
 
 //Paralllel loop implementation?????????
  //Used for testing. Remove when fully implemented.
- main :: proc(){
+@(enable_target_feature="avx,avx2")
+main :: proc(){
 
      HEALTH_STORAGE_INDEX :: 0
      NPC_POSITION_STORAGE_INDEX :: 1
@@ -974,12 +1100,12 @@ update :: proc(){
      }
 
 
-     bench_proc :: #type proc "contextless" (dst : [^]BYTE, src : [^]BYTE, size : QWORD) 
+     bench_proc :: #type proc "contextless" (dst : [^]BYTE, src : [^]BYTE, size : QWORD) ->DOUBLE
      
      ksize :: 1 << 30
      kcount :: 8
 
-     src:= transmute([^]BYTE)intrinsics.syscall(
+     src:= transmute([^]#simd[16]u32)intrinsics.syscall(
             linux.SYS_mmap,
             0x00,
             uintptr(ksize),
@@ -990,7 +1116,7 @@ update :: proc(){
         )
 
 
-     dst := transmute([^]BYTE)intrinsics.syscall(
+     dst := transmute([^]#simd[16]u32)intrinsics.syscall(
             linux.SYS_mmap,
             0x00,
             uintptr(ksize),
@@ -1001,13 +1127,19 @@ update :: proc(){
         )
 
 
+     b := src[0]+dst[0]
 
-     GetTick :: proc() -> QWORD{
+
+
+     GetTick :: proc "contextless"() -> QWORD{
          ts,_ := linux.clock_gettime(.MONOTONIC)
          return QWORD(ts.time_sec * 1000000000 + ts.time_nsec)
 
      }
 
+     RDTSC :: proc "contextless"() -> QWORD{
+         return QWORD(intrinsics.read_cycle_counter())
+     }
 
      GetFreq ::proc() -> QWORD{
          return 1000000000
@@ -1025,74 +1157,208 @@ update :: proc(){
 
      }
 
-@(enable_target_feature="avx,avx2")
-copy_unroll :: proc "contextless" (#no_alias dst, src: [^]BYTE, size: QWORD, $UNROLL: QWORD) {
-    dstv := transmute([^]#simd[8]f32)dst
-    srcv := transmute([^]#simd[8]f32)src
+     @(enable_target_feature="avx,avx2")
+     copy_unroll :: proc "contextless" (#no_alias dst, src: [^]BYTE, size: QWORD, $UNROLL: QWORD) -> DOUBLE {
 
-    vec_count := size / size_of(#simd[8]f32)
+         dstv : [^]#simd[8]f32 = transmute([^]#simd[8]f32)dst
+         srcv : [^]#simd[8]f32 = transmute([^]#simd[8]f32)src
 
-    //We are doing 16 because our MLP is 16ish
-    t1 : #simd[8]f32 = ---
-    t2 : #simd[8]f32 = ---
-    t3 : #simd[8]f32 = ---
-    t4 : #simd[8]f32 = ---
-    t5 : #simd[8]f32 = ---
-    t6 : #simd[8]f32 = ---
-    t7 : #simd[8]f32 = ---
-    t8 : #simd[8]f32 = ---
-    t9 : #simd[8]f32 = ---
-    t10 : #simd[8]f32 = ---
-    t11 : #simd[8]f32 = ---
-    t12 : #simd[8]f32 = ---
-    t13 : #simd[8]f32 = ---
-    t14 : #simd[8]f32 = ---
-    t15 : #simd[8]f32 = ---
-    t16 : #simd[8]f32 = ---
-    for i :QWORD= 0; i + 15 < vec_count; i+=16{
+         vec_count : QWORD = size / size_of(#simd[8]f32)
 
-            t1 = dstv[i]
-            t2 = dstv[i+1]
+         //We are doing 16 because our MLP is 16ish
+         t1 : #simd[8]f32 = ---
+         t2 : #simd[8]f32 = ---
+         t3 : #simd[8]f32 = ---
+         t4 : #simd[8]f32 = ---
+         t5 : #simd[8]f32 = ---
+         t6 : #simd[8]f32 = ---
+         t7 : #simd[8]f32 = ---
+         t8 : #simd[8]f32 = ---
+         t9 : #simd[8]f32 = ---
+         t10 : #simd[8]f32 = ---
+         t11 : #simd[8]f32 = ---
+         t12 : #simd[8]f32 = ---
+         t13 : #simd[8]f32 = ---
+         t14 : #simd[8]f32 = ---
+         t15 : #simd[8]f32 = ---
+         t16 : #simd[8]f32 = ---
 
-            t3 = dstv[i+2]
-            t4 = dstv[i+3]
+         for i :QWORD= 0; i + 15 < vec_count; i+=16{
 
-            t5 = dstv[i+4]
-            t6 = dstv[i+5]
+             t1 = dstv[i]
+             t2 = dstv[i+1]
+
+             t3 = dstv[i+2]
+             t4 = dstv[i+3]
+
+             t5 = dstv[i+4]
+             t6 = dstv[i+5]
         
-            t7 = dstv[i+6]
-            t8 = dstv[i+7]
+             t7 = dstv[i+6]
+             t8 = dstv[i+7]
         
-            t9 = srcv[i]
-            t10 = srcv[i+1]
+             t9 = srcv[i]
+             t10 = srcv[i+1]
         
-            t11 = srcv[i+2]
-            t12 = srcv[i+3]
+             t11 = srcv[i+2]
+             t12 = srcv[i+3]
         
-            t13 = srcv[i+4]
-            t14 = srcv[i+5]
+             t13 = srcv[i+4]
+             t14 = srcv[i+5]
         
-            t15 = srcv[i+6]
-            t16 = srcv[i+7]
-    }
-    f := (t1+t2)+(t3+t4)+(t5+t6)+(t7+t8)+(t9+t10)+(t11+t12)+(t13+t14)+(t15+t16)
-}
-//
-// ===== Wrappers for 2 → 16 =====
-//
+             t15 = srcv[i+6]
+             t16 = srcv[i+7]
+         }
+         f := (t1+t2)+(t3+t4)+(t5+t6)+(t7+t8)+(t9+t10)+(t11+t12)+(t13+t14)+(t15+t16)
 
-copy_4  :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,4) }
-copy_8  :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,8) }
-copy_16  :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,16) }
-copy_32 :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,32) }
-copy_64 :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,64) }    
-     warm_up :: proc(dst : [^]BYTE, src : [^]BYTE, size : QWORD){
+         return 0.0
+     }
 
-         for i:QWORD =0; i < size; i += 64{
-             dst[i] = 4
-             src[i] = 2
+
+     copy_4  :: proc "contextless" (#no_alias d, s: [^]BYTE, sz: QWORD) -> DOUBLE {return copy_unroll(d,s,sz,4) }
+     copy_8  :: proc "contextless" (#no_alias d, s: [^]BYTE, sz: QWORD) -> DOUBLE {return copy_unroll(d,s,sz,8) }
+     copy_16  :: proc "contextless" (#no_alias d, s: [^]BYTE, sz: QWORD) -> DOUBLE{return copy_unroll(d,s,sz,16) }
+     copy_32 :: proc "contextless" (#no_alias d, s: [^]BYTE, sz: QWORD) -> DOUBLE {return copy_unroll(d,s,sz,32) }
+     copy_64 :: proc "contextless" (#no_alias d, s: [^]BYTE, sz: QWORD) -> DOUBLE {return copy_unroll(d,s,sz,64) }
+
+
+     set_bench :: proc "contextless"(#no_alias d,s : [^]BYTE, num_way : QWORD) -> DOUBLE {
+
+         load : BYTE = ---
+
+         for i in 0..<(4096 / num_way){
+             for j in 0..<num_way{
+                 load = s[j * 4096]
+             }
          }
 
+         d[0] = load
+
+         return 0.0
+
+
+
+         
+         
+         
+     }
+
+
+     
+     bank_same :: proc "contextless"(#no_alias d,s : [^]BYTE, page_count : QWORD) -> DOUBLE {
+
+         dstv : [^]DWORD = transmute([^]DWORD)d
+         srctv : [^]WORD = transmute([^]WORD)s
+
+
+         load_a : DWORD = ---
+         load_b : DWORD = ---
+
+         for i in 0..<4096{
+             base := i * 2
+             load_a = DWORD(srctv[base]) 
+             load_b = DWORD(srctv[base+1])
+         }
+
+         dstv[0] = load_a + load_b 
+
+         return 0.0
+         
+
+     }
+
+
+
+     bank_different :: proc "contextless"(#no_alias d,s : [^]BYTE, page_count : QWORD) -> DOUBLE {
+
+         dstv : [^]DWORD = transmute([^]DWORD)d
+         srctv : [^]WORD = transmute([^]WORD)s
+
+
+         load_a : DWORD = ---
+         load_b : DWORD = ---
+
+         for i in 0..<4096{
+             base := i * 2
+
+             load_a = DWORD(srctv[base])
+             load_b = DWORD(srctv[base+4])
+
+
+         }
+
+         dstv[0] = load_a + load_b 
+
+         return 0.0
+
+     }
+     
+     tlb_4096 :: proc "contextless"(#no_alias d,s : [^]BYTE, page_count : QWORD) -> DOUBLE {
+         t2 : QWORD = ---
+         t1 : QWORD = ---
+      
+         load : BYTE = ---
+
+         
+         t1 = GetTick()
+
+         for _ in 0..<4{
+             for i in 0..<page_count{
+                 for j in 0..<64{
+                     load += s[(i * 4096) + QWORD(j)]
+                 }
+             }
+         }
+
+
+         t2 = GetTick()
+         
+
+         d[0] = load
+
+         return DOUBLE(t2- t1)
+
+         
+
+
+
+     }
+
+
+     memory_aliasing :: proc "contextless"(#no_alias d,s : [^]BYTE, stride_read_write : QWORD) -> DOUBLE {
+
+         temp : BYTE = 0
+
+
+         for i in 0..<((1<<30) / 8192){
+             base := QWORD(i)*4096
+
+             d[base] = 0x32
+             temp = s[base + stride_read_write]
+             
+
+
+         }
+
+
+         //d[0] = temp
+
+
+         return 0.0;
+         
+         
+     }
+     
+     
+     warm_up :: proc(dst : [^]BYTE, src : [^]BYTE, size : QWORD){
+
+         for i in 0..<(size/4096){
+             base := i * 4096
+             dst[base] = 5
+             src[base] = 2
+
+         }
+        
      }
      
      
@@ -1114,32 +1380,102 @@ copy_64 :: proc "contextless" (d, s: [^]BYTE, sz: QWORD) { copy_unroll(d,s,sz,64
          fmt.printf("%.30f GIB/s \n",bw)
      }
 
-     warm_up(dst,src, ksize)
-     fmt.println("simple memmove")
-     bench(dst,src,ksize, memcpy_simple)
-     fmt.println("simple memcpy")
-     bench(dst,src,ksize, memcpy_non_overlap)
+     bench_set :: proc(dst : [^]BYTE, src : [^]BYTE, size : QWORD, bench : bench_proc){
+
+         time1 := GetTick()
+         for iter in 0..<kcount{
+             bench(dst,src, size)
+         }
+         time2 := GetTick()
+
+         second := f64(time2-time1)/ f64(GetFreq())
+
+         fmt.printf("%v ways, seconds : %.10f \n",size, second)
+
+     }
+     bench_tlb :: proc(dst : [^]BYTE, src : [^]BYTE, $size : QWORD, bench : bench_proc){
+
+         dst_timing := transmute([^]DOUBLE)dst
+
+         page_sizes :[]QWORD= {1,2,4,8,16,32,60,61,62,63,64,65,128,256,512,1024,2046,2047,2048,2049,4096,8192,16384,32768,65536,131072,262144}
+         
+         for i in 0..<len(page_sizes){
+             dst_timing[i] = bench(dst,src, page_sizes[i])
+         }
+         
+         for i in 0..<len(page_sizes){
+             working_set := page_sizes[i] * 4096
+             fmt.printf("page_count %v, working_set %v, seconds %.10f \n",page_sizes[i], working_set, dst_timing[i] / DOUBLE(GetFreq()))
+         }
+     }
+
+     //there seem to be a false dependency on store followed by load with 4096 strides
+     bench_memory_false_dependecy :: proc(dst : [^]BYTE, src : [^]BYTE, $size : QWORD, bench : bench_proc){
+         time1 := GetTick()
+         for size in 0..<kcount{
+             bench(dst,src,0)
+         }
+         time2 := GetTick()
+
+         time1_4096 := GetTick()
+         for size in 0..<kcount{
+             bench(dst,src,4096)
+         }
+         time2_4096 := GetTick()
+
+         time1_3584 := GetTick()
+         for size in 0..<kcount{
+             bench(dst,src,4096-512)
+         }
+         time2_3584 := GetTick()
+
+         time1_4608 := GetTick()
+         for size in 0..<kcount{
+             bench(dst,src,4096+512)
+         }
+         time2_4608 := GetTick()
+
+         second := f64(time2-time1)/ f64(GetFreq())
+         second_4096 := f64(time2_4096-time1_4096)/ f64(GetFreq())
+         second_3584 := f64(time2_3584-time1_3584)/ f64(GetFreq())
+         second_4608 := f64(time2_4608-time1_4608)/ f64(GetFreq())
+         fmt.printf("0 offset write read %.7f,\n4096 offset write read %.7f,\n3584 offset write read %.7f\n4608 offset write read %.7f\n",second,second_4096, second_3584, second_4608)
+
+     }
+
+
+     bench_bank :: proc(dst : [^]BYTE, src : [^]BYTE){
+         timed_begin := GetTick()
+         for size in 0..<kcount{
+             bank_different(dst,src,0)
+         }
+
+         timed_end := GetTick()
+
+
+         times_begin := GetTick()
+         
+         for size in 0..<kcount{
+             bank_same(dst,src,0)
+         }
+
+         times_end := GetTick()
+
+         second_d := f64(timed_end-timed_begin)/ f64(GetFreq())
+         second_s := f64(times_end-times_begin)/ f64(GetFreq())
+
+         fmt.printf("same bank load: %.7f, different bank load: %.7f", second_s, second_d)
+
+
+
+     }
+
      
-     fmt.println("avx 2 load store 4 unroll")
-     bench(dst,src,ksize, copy_4)
-     
-     fmt.println("avx 2 load store 8 unroll")
-     bench(dst,src,ksize, copy_8)
-
-
-     fmt.println("avx 2 load store 16 unroll")
-     bench(dst,src,ksize, copy_16)
-
-
-     fmt.println("avx 2 load store 32 unroll")
-     bench(dst,src,ksize, copy_32)
-
-
-     fmt.println("avx 2 load store 64 unroll")
-     bench(dst,src,ksize, copy_64)
-      //Maybe add a free list to handle "remove" indices from the blob.
+     //warm_up(dst,src, 4096 * 8)
+     //bench_bank(dst,src)
      
 
+     
      //TODO:Khal Procedure to work on:
      //Remove
      //Get identifier with datas
