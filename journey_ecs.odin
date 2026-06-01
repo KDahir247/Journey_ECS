@@ -255,7 +255,7 @@ sysm_proc :: #type proc "contextless" (data_buffer : [^]BYTE, data_meta : DataMe
 
 DataMeta :: struct{
     //lane_count : QWORD,
-    data_size : DWORD,
+    //data_size : DWORD,
     total_indices : DWORD,
 }
 
@@ -318,29 +318,37 @@ SCALAR : DWORD : 0b0010_0000_0000_0000
 
 
 World :: struct($THREAD_COUNT : DWORD) #align(64){
+    // 1 Cacheline
+
+    
     header : [^]ColumnarHeader,
-    query_block_mask : [^]BlockMask,
-    columnar_table : [^]ColumnarPage,
-    unique_components_count : QWORD,
-    owner_thread_id : QWORD,
+    columnar_blocks : [^]ColumnarBlock(THREAD_COUNT),
+    columnar_allocated_bytes : QWORD,
+    read_offset_bytes : QWORD,
+    
     ds_ops : [^]StructuralOperation,
     dso_buffer : [^]BYTE,
-    sync_frame_gen : QWORD,
-    
 
-    sync_point : [4]AtomicSynchronization,
+    owner_thread_id : QWORD,
+    sync_frame_gen : QWORD,
+    //
+
+    //thread_count number cache line
+    sync_point : [THREAD_COUNT]AtomicSynchronization,
+    //
+    
+    
 }
 
 ColumnarHeader :: struct{
-    data_size : DWORD,
+    query_mask : DWORD,
     start_indices_index : DWORD,
     end_indices_index : DWORD,
     flags : DWORD, //high 16 bit are reserved
 }
 
-BlockMask :: struct{
-    enabled_mask : BYTE,
-    disabled_mask : BYTE,
+ColumnarBlock :: struct($THREAD_COUNT : DWORD){
+    block : [THREAD_COUNT]ColumnarPage
 }
 
 ColumnarPage :: struct #align(4096){
@@ -382,7 +390,7 @@ AtomicSynchronization :: struct #align(64){
 
 
 @(optimization_mode="favor_size") 
-init_world :: proc (world : ^World($thread_count), $unique_data_capacity : QWORD)
+init_world :: proc (world : ^World($thread_count), $unique_data_capacity : QWORD, $unique_read_data_capacity : QWORD)
 where thread_count <= 4 && thread_count & 1 == 0 && unique_data_capacity > 0 {
 
     when ODIN_DEBUG && DUMP{
@@ -390,55 +398,97 @@ where thread_count <= 4 && thread_count & 1 == 0 && unique_data_capacity > 0 {
         append_csv("World address input w", QWORD(uintptr(world)))
         append_csv("thread_count constant r", QWORD(thread_count))
         append_csv("unique_data_count constant r", QWORD(unique_data_capacity))
+        append_csv("unique_read_data_count constant r", QWORD(unique_read_data_capacity))
      }
 
 
-    buffer_address : uintptr = ---
+    READ_WRITE : QWORD : 0x03
+    PRIVATE_ANON : QWORD : 0x21
+    ADVISE_POPULATE_READ : QWORD : 0x16
+    ADVISE_POPULATE_WRITE : QWORD : 0x17
+    ADVISE_COLLAPSE : QWORD : 0x19
     
-    {
-        REQUIRED_HEADER_BYTES : QWORD : (size_of(ColumnarHeader) * unique_data_capacity + 0xFFF) & 0xFFFFFFFFFFFFF000
-        REQUIRED_BLOCK_BYTES : QWORD : (size_of(BlockMask) * unique_data_capacity + 0xFFF)  & 0xFFFFFFFFFFFFF000
-        REQUIRED_COLUMNAR_BYTES : QWORD : size_of(ColumnarPage) * unique_data_capacity
 
-        REQUIRED_TOTAL_BYTES : QWORD : REQUIRED_HEADER_BYTES + REQUIRED_BLOCK_BYTES + REQUIRED_COLUMNAR_BYTES
+    //The ColumnarBlock Allocation
+    {
+        buffer_address : uintptr = ---
+
+        REQUIRED_HEADER_BYTES : QWORD : (size_of(ColumnarHeader) * (unique_data_capacity + unique_read_data_capacity) + 0xFFF) & 0xFFFFFFFFFFFFF000
+
+        REQUIRED_RW_BLOCK_BYTES : QWORD : (size_of(ColumnarBlock(thread_count)) * unique_data_capacity + 0x1FFFFF) & 0xFFFFFFFFFFE00000
+        REQUIRED_R_BLOCK_BYTES : QWORD : (size_of(ColumnarBlock(thread_count)) * unique_read_data_capacity + 0x1FFFFF) & 0xFFFFFFFFFFE00000
+
+        //TODO:Khal read the syscall implementations to see what it actually does.
+       
+        REQUIRED_COL_BYTES : QWORD : REQUIRED_RW_BLOCK_BYTES + REQUIRED_R_BLOCK_BYTES
 
         buffer_address = intrinsics.syscall(
             linux.SYS_mmap,
             0x00,
-            uintptr(REQUIRED_TOTAL_BYTES),
-            uintptr(0x03),
-            uintptr(0x21),
+            uintptr(REQUIRED_HEADER_BYTES),
+            uintptr(READ_WRITE),
+            uintptr(PRIVATE_ANON),
             ~uintptr(0),
             uintptr(0),
         )
 
-        world.header = cast([^]ColumnarHeader)(buffer_address)
-        world.query_block_mask = cast([^]BlockMask)(buffer_address + uintptr(REQUIRED_HEADER_BYTES))
-        world.columnar_table = cast([^]ColumnarPage)(buffer_address + uintptr(REQUIRED_HEADER_BYTES + REQUIRED_BLOCK_BYTES))
 
-        world.unique_components_count = unique_data_capacity
+        world.header = cast([^]ColumnarHeader)buffer_address
+        
+        buffer_address = intrinsics.syscall(
+            linux.SYS_mmap,
+            0x00,
+            uintptr(REQUIRED_COL_BYTES),
+            uintptr(READ_WRITE),
+            uintptr(PRIVATE_ANON),
+            ~uintptr(0),
+            uintptr(0),
+        )
+
+        //Page fault pages (we don't want to change the page meta eg. modified bit)
+        intrinsics.syscall(
+            linux.SYS_madvise,
+            buffer_address,
+            uintptr(REQUIRED_COL_BYTES),
+            uintptr(ADVISE_POPULATE_WRITE)
+        )
+
+
+        //THP support (collapse to 2mib pages)
+        intrinsics.syscall(
+            linux.SYS_madvise,
+            buffer_address,
+            uintptr(REQUIRED_COL_BYTES),
+            uintptr(ADVISE_COLLAPSE)
+        )
+        
+
+        world.columnar_blocks = cast([^]ColumnarBlock(thread_count))(buffer_address)
+        world.columnar_allocated_bytes = REQUIRED_COL_BYTES
+        world.read_offset_bytes = REQUIRED_RW_BLOCK_BYTES
+
+
+        fmt.println(uintptr(world.header), uintptr(world.columnar_blocks))
 
         when ODIN_DEBUG && DUMP{
-            append_csv("total_columnar_bytes local r", REQUIRED_COLUMNAR_BYTES)
+            
             append_csv("total_header_bytes local w", REQUIRED_HEADER_BYTES)
-            append_csv("total_size local w", REQUIRED_TOTAL_BYTES)
+            
+            append_csv("total_columnar_bytes local r", REQUIRED_COL_BYTES)
+            append_csv("total_size local w", REQUIRED_COL_BYTES+ REQUIRED_HEADER_BYTES)
             
             append_csv("buffer_address local w", QWORD(uintptr(buffer_address)))
             append_csv("world_header_address input w", QWORD(uintptr(world.header)))
-            append_csv("world_query_mask_address input w", QWORD(uintptr(world.query_block_mask)))
-            append_csv("world_columnar_table input w", QWORD(uintptr(world.columnar_table)))
+            append_csv("world_columnar_table input w", QWORD(uintptr(world.columnar_blocks)))
         }
-        
     }
 
-    world.owner_thread_id = QWORD(intrinsics.syscall(linux.SYS_gettid))
-
-    when ODIN_DEBUG && DUMP{
-        append_csv("world_owner_thread_id input w", QWORD(world.owner_thread_id))
-    }
     
-    {   
-        REQUIRED_DS_OP_BYTES : QWORD : 4096 //assuming the op enum to be 1 byte so we can issue 4096
+    //The Deferred Operation Allocation
+    {
+        buffer_address : uintptr = ---
+        
+        REQUIRED_DS_OP_BYTES : QWORD : 4096 //assuming the op enum to be 1 byte so we can issue 4096 ops
         REQUIRED_DSO_BUFFER_BYTES : QWORD : 131072 //assuming limit of op struct to be 32 bytes so (131072 / 32) is 4096, so we can issue 4096 
 
         REQUIRED_TOTAL_BYTES : QWORD : REQUIRED_DS_OP_BYTES + REQUIRED_DSO_BUFFER_BYTES
@@ -447,8 +497,8 @@ where thread_count <= 4 && thread_count & 1 == 0 && unique_data_capacity > 0 {
             linux.SYS_mmap,
             0x00,
             uintptr(REQUIRED_TOTAL_BYTES),
-            uintptr(0x03),
-            uintptr(0x21),
+            uintptr(READ_WRITE),
+            uintptr(PRIVATE_ANON),
             ~uintptr(0),
             uintptr(0),
         )
@@ -466,9 +516,30 @@ where thread_count <= 4 && thread_count & 1 == 0 && unique_data_capacity > 0 {
             append_csv("world_ds_buffer_address input w", QWORD(uintptr(world.dso_buffer)))
         }
     }
+
+    
+    world.owner_thread_id = QWORD(intrinsics.syscall(linux.SYS_gettid))
+
+    when ODIN_DEBUG && DUMP{
+        append_csv("world_owner_thread_id input w", QWORD(world.owner_thread_id))
+    }    
+
 }
 
 
+lock_readonly_component :: proc(world : ^World($thread_count)){
+    READONLY : QWORD : 0x01
+
+    intrinsics.syscall(
+        linux.SYS_mprotect,
+        uintptr(world.columnar_blocks) + uintptr(world.read_offset_bytes),
+        uintptr(world.columnar_allocated_bytes - world.read_offset_bytes),
+        uintptr(READONLY),
+    )
+}
+
+
+/*
 @(optimization_mode="favor_size")
 register_columnar :: proc(world : ^World($thread_count), $data_typeid : typeid, $table_index : QWORD, $start : DWORD, $end : DWORD)
 where intrinsics.type_is_struct(data_typeid) && end > start && thread_count <= 4 && thread_count & 1 == 0 && size_of(data_typeid) > 4 #no_bounds_check{
@@ -599,7 +670,7 @@ where intrinsics.type_is_struct(data_typeid) && end > start && thread_count <= 4
 
 
 
-/*
+
 brief informal statement of the problem:
 We need to support filtering multiple instances of a single component type based on their fields or flags  
 
@@ -817,10 +888,6 @@ For each 64 bytes it is stored in a set. Which mean 64 is stored in set 0, 128 i
 If we use let say only set 0 and not any other set by saturating the ways then we are under utilizing the cache.
 This can be caused by having critcal stride offset.
 
-Ideally the solution to the problem (filtering) shouldn't cause alot of contention to the cpu cache, so cache eviction and contention
-should be avoid by using all fields in the data sequentially and multiple times. The repacked layout of the data we are trying to filter must not 
-cause large strides when filtering. From single filter on single fields, multiple fiters on single field, multiple filters on multiple fields.
-
 AMD l1 data cache is most likely VIPT (Virtually indexed, physically tagged) meaning that the set and the individual data in cache is fetched using virtual address, but the tag
 to determine the specific cache in the set (which way in the set) uses the physical address rather than the virtual address.
 
@@ -853,19 +920,73 @@ will have a cache miss if the data isn't already in the cache. We can track 24 o
 NOTE should we just make the lane size size_of(type) * LANE == 64 bytes? so if we fiter or use a single field type than we are
 using a full cache line. We can do two ymm0 load by smashing them. Intsead of size_of(type) * lane_count == 32 byte if ymm0 or size_of(type) * lane_count == 16 bytes if xmm
 
-Lower bound is 
-Fair bound is
-Ideal bound is
-High bound is 
+Ideally the solution to the problem (filtering) shouldn't cause alot of contention to the cpu cache, so cache eviction and contention
+should be avoid by using all fields in the data sequentially and multiple times. The repacked layout of the data we are trying to filter must not 
+cause large strides when filtering. From single filter on single fields, multiple fiters on single field, multiple filters on multiple fields.
+but there will only be one filter type that will be tied to a field. A single filter type can't be tied to multiple field. Eg if position.x < 5
+This will be tied to the x field a never the y field. If we are looking at cores. We want to avoid the possibility of loading the same cache line to different cores.
 
+We know that if there a data miss it fetches in cache line granularity (64 bytes), so we can either organize data in the following
+
+We know that each core contains it own l1 cache and l2 cache
+
+(assuming x and y a f32)
+aos (x,y,x,y,x,y,x,y,x,y) so if we filter on just x we are only utilizing 50 percent cache line, stride size would be 4 bytes
+soa ([x,x,x,x,x,x,x,.........], [y,y,y,y,y,y,..............]) so if we just filter on just x we utilize 100 percent cache line, stride size would be 0 bytes
+soa_aos_simd ([x,x,x,x,x,x,x,x], [y,y,y,y,y,y,y,y], [x,x,x,x,x,x,x,x], [y,y,y,y,y,y,y,y], etc....) so if we just filter on just x we only utilize 50 percent cache line, stride size would be 32 bytes
+soa_aos_cache_line ([x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x],[y,y,y,y,y,y,y,y,y,y,y,y,y,y,y,y], etc...) so if we just filter on just x we utilize 100 percent of the cache line. stride size would be 64 bytes
+
+
+Lower bound is we are bouncing fields on filter and only filtering a single field, which load unnecessary data in cache.
+Fair bound is we organize the fields in a way where it a N array where N < 64 and N is a SIMD lane count. This will still load unnecessary data
+We also know the N array to be either 32 bytes or 16 bytes depending on xmm or ymm
+Ideal bound is we organize the fields in a way where it a N array where N == 64 (cache line). This will store each field in different cache line so filtering will only use a cache line and stride are predicatable
+We also know the N array to be 64 bytes so for f32 that would be an array of 16 for f64 that would be 8
+High bound is we organize the fields in a way where it a SOA array where all the fields are stored as a array. The SOA array length must be determined by the struct field count and field size so we can't really know unless
+know the struct type
 
 
 /////////TLB//////////
 
-//TODO:Khal add TLB bench and write low and high bounds and target
-//would hardware prefetch stall if it there a prefetch and it is not in the tlb?
+We know that each core get it own dedicated MMU (L1 data TLB, l1 instruction TLB and L2 unified TLB)
+We know that the lower 12 or 21 bits of any virtual address is the offset of the physical address, so we can gurantee that accessing a page
+sequentially will also access the physical address sequentially.
+
+We want to prevent loading the same page to multiple core. We want each core's tlb to have different pages for write, but sharing pages on read is fine.
+Sharing a page across cores may result in a first time access tlb miss on other cores if it is first time access even though a single core has already access it.
+
+amd 19h family optimization (zen3 to zen4): If a 16-Kbyte aligned block of four consecutive 4-Kbyte pages are also consecutive and 16-Kbyte
+aligned in physical address space and have identical page attributes, the processor may
+opportunistically store them in a single TLB entry resulting in increased effective capacity for both
+L1 and L2 DTLB and ITLB. We can try to ahieve this by allocating large block in mmap for example 16KIB. We can do better though.
+    Especially on linux by utilizing THP (Transparent Huge Page) if enabled (default). We can allocate in 2MIB granularity and possibly madvise.
 
 
+4kIB Page Structure
+9 bits     9 bits       9 bits        9 bits       12 bits
+PMLE4  ->  PDPE    ->   PDE     ->    PTE     ->   offset 
+
+2MIB Page Structure
+9 bits     9 bits       9 bits        21 bits      
+PMLE4  ->  PDPE    ->   PDE     ->    offset
+
+L2 TLB can hold 1536 4KIB or 2 MIB pages as well as PDE (second last table for 4KIB walk skipping 3 table heirarchy, but last table for 2MIB walk skipping 3 table heirarchy) 
+
+The cpu processor has either 2 (zen to zen2) to 6 (zen3 to zen4) page walker that can handle l2 tlb miss. Miss can start speculatively from the data or instruction
+The table walker contains a 64 entry cache (Page Directory Cache) that hold PMLE4 and PDPE entries, which may increase virtual to physical translation by skipping the first and second table 
+
+Since TLB miss can start speculatively we can assume that there is some sort of prefetching done in the MMU. We are not quite sure which type, but
+Sequential access should be optimal and is assumed to be supported. 
+
+from AMD arch manual
+
+A change to any paging data-structure entry is not automatically reflected in the TLB. Software must invalidate the TLB entry of a modified translation-table entry so that the
+change is reflected in subsequent address translations.
+If a table entry is updated and does not remove a permission violation, it is unpredictable whether the old or updated entry will be
+used until an invalidation is performed. 
+
+so we can say that there will be a tlb shootdown when we change from r/w to only read only or even better if we are even more strict with the
+permission we can say that there will be a tlb shootdown (invalidation of the entry in the TLB).
 
 
 
@@ -900,7 +1021,7 @@ max displacement is 32 bits (DWORD)
 it looks like most of the instruction immediate only work for i8, i16, and i32
 would branching reduce how good the harware will prefetch for the instruction cache?
 For most instructions, the default operand size in 64-bit mode is 32 bits
-*/
+
 
 build_sym_predicate :: proc($data_typeid : typeid, $field_name : string, $cmp_op : ComparisionOperation, val : ^$N, $comb_op : CombinatorOperation, sysm_predicate : ^SystemPredicate)
 where intrinsics.type_is_struct(data_typeid) && (intrinsics.type_is_float(N) || intrinsics.type_is_integer(N)) && intrinsics.type_field_type(data_typeid, field_name) == N{
@@ -1038,7 +1159,7 @@ update :: proc(){
 
 
 }
-
+*/
 //Paralllel loop implementation?????????
  //Used for testing. Remove when fully implemented.
 @(enable_target_feature="avx,avx2")
@@ -1071,11 +1192,11 @@ main :: proc(){
 
   	 world : World(4) = ---
 
-     init_world(&world, 28)
+    init_world(&world, 28,5)
      
      //Register (NPC) Position "component" in the world. 
-     register_columnar(&world, Position, NPC_POSITION_STORAGE_INDEX, 21, 300)
-     register_columnar(&world, Position,ENEMY_POSITION_STORAGE_INDEX, 0, 19)
+     //register_columnar(&world, Position, NPC_POSITION_STORAGE_INDEX, 21, 300)
+     //register_columnar(&world, Position,ENEMY_POSITION_STORAGE_INDEX, 0, 19)
      
      readjust_npc_position :: proc "contextless" (buf : [^]BYTE, meta : DataMeta){
          data : [^]#soa[8]Position = transmute([^]#soa[8]Position)buf
@@ -1086,13 +1207,13 @@ main :: proc(){
          
      }
 
-     npc_pos_overlapping_x : SystemPredicate
-     build_sym_predicate(Position, "x", .EQ, &player_position.x, .OR, &npc_pos_overlapping_x)
-     npc_pos_overlapping_y : SystemPredicate 
-     build_sym_predicate(Position, "y", .EQ, &player_position.y, .NIL, &npc_pos_overlapping_y)
+     //npc_pos_overlapping_x : SystemPredicate
+     //build_sym_predicate(Position, "x", .EQ, &player_position.x, .OR, &npc_pos_overlapping_x)
+     //npc_pos_overlapping_y : SystemPredicate 
+     //build_sym_predicate(Position, "y", .EQ, &player_position.y, .NIL, &npc_pos_overlapping_y)
 
      //This system will run for all the npc positions only if the player position is overlapping (either x or y) 
-     run_0(&world, NPC_POSITION_STORAGE_INDEX, SECOND_THREAD, readjust_npc_position, npc_pos_overlapping_x, npc_pos_overlapping_y)
+     //run_0(&world, NPC_POSITION_STORAGE_INDEX, SECOND_THREAD, readjust_npc_position, npc_pos_overlapping_x, npc_pos_overlapping_y)
      
      when ODIN_DEBUG && DUMP{
          dump_csv_to_file("/home/khalid/Documents/GitHub/Journey_ECS/dump.csv")
@@ -1110,10 +1231,12 @@ main :: proc(){
             0x00,
             uintptr(ksize),
             uintptr(0x03),
-            uintptr(0x21),
+            uintptr(0x22),
             ~uintptr(0),
             uintptr(0),
         )
+
+    linux.madvise(src, ksize,.HUGEPAGE)
 
 
      dst := transmute([^]#simd[16]u32)intrinsics.syscall(
@@ -1121,7 +1244,7 @@ main :: proc(){
             0x00,
             uintptr(ksize),
             uintptr(0x03),
-            uintptr(0x21),
+            uintptr(0x22),
             ~uintptr(0),
             uintptr(0),
         )
