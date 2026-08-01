@@ -1,10 +1,8 @@
 package journey
 
-
 import "base:intrinsics"
 import "core:sys/linux"
 import "base:runtime"
-
 
 //Debug use
 import "core:fmt"
@@ -316,39 +314,60 @@ SIMD_8 : DWORD : 0b0011_0000_0000_0000
 SIMD_4 : DWORD : 0b0001_0000_0000_0000
 SCALAR : DWORD : 0b0010_0000_0000_0000
 
-
-World :: struct($THREAD_COUNT : DWORD) #align(64){
-    // 1 Cacheline
-
-    
+World :: struct($THREAD_COUNT : DWORD){
+    // 1 Cacheline (Base)
     header : [^]ColumnarHeader,
-    columnar_blocks : [^]ColumnarBlock(THREAD_COUNT),
-    columnar_allocated_bytes : QWORD,
-    read_offset_bytes : QWORD,
-    
+    columnar_blocks : [^]ColumnarBlock,
+
+    read_write_columnar_block_bytes : QWORD,
+    read_columnar_block_bytes : QWORD,
+
+    //Should we replace this with workspace and Query Cache.
+    //Worksapce bytes should be the maximum threshold of 1 page because we will be working with ColumnarPage chunks?
+    //Actually should we make this, 1 page * number of thread so each thread get it own page, which will match the ColumnarBlock.
+    workspace : [^]BYTE,
+    workspace_bytes_capacity : QWORD,
+
     ds_ops : [^]StructuralOperation,
     dso_buffer : [^]BYTE,
-
-    owner_thread_id : QWORD,
-    sync_frame_gen : QWORD,
     //
 
-    //thread_count number cache line
+    //some Cacheline (Filtering engine)
+    _unused_1 : [7]QWORD,
+    filter_cache : [^]BYTE, //TODO:Khal not yet sure of the structure and data layout.
+    //
+
+    // 1 Cacheline (Main Sync)
+    owner_thread_id : QWORD,
+    sync_frame_gen : QWORD,
+    _unused_ : [6]QWORD,
+    //
+
+    //thread count number cache line (Thread Sync)
     sync_point : [THREAD_COUNT]AtomicSynchronization,
     //
     
-    
+    //1 Cache line (Debug/Reflection)
+    //Eg. which components a indices has
+    //tracking?
+    unused_2 : [8]QWORD,
+    //
+
 }
 
+//TODO:Khal we need to better orgranize this. We don't really know the access pattern nor do we actually know which data we
+//would need to store. 
+//We know we need to query_mask, to skip the bit_zero_mask (coarse query)
+//We need the start_indices_index and end_indices_index to determine the "entity id range" eg. enitity 5 to 10
 ColumnarHeader :: struct{
     query_mask : DWORD,
-    start_indices_index : DWORD,
-    end_indices_index : DWORD,
-    flags : DWORD, //high 16 bit are reserved
+    indices_index : DWORD,
+    indices_per_page : DWORD,
+    struct_padding_offset : DWORD, 
 }
 
-ColumnarBlock :: struct($THREAD_COUNT : DWORD){
-    block : [THREAD_COUNT]ColumnarPage
+ColumnarBlock :: struct{
+    block : [4]ColumnarPage
 }
 
 ColumnarPage :: struct #align(4096){
@@ -388,19 +407,31 @@ AtomicSynchronization :: struct #align(64){
     //TODO:Khal implement me and add sync metadata if needed
 }
 
+Foo :: struct{
+    a : [16]DWORD,
+    b : [8]QWORD,
+    c : [64]BYTE
+
+}
+
+
+
+Lambda :: struct($T : typeid){
+	call :  proc "contextless" (type_array : [^]#soa[0x40 / align_of(T)]T),
+}
+
+
 
 @(optimization_mode="favor_size") 
 init_world :: proc (world : ^World($thread_count), $unique_data_capacity : QWORD, $unique_read_data_capacity : QWORD)
-where thread_count <= 4 && thread_count & 1 == 0 && unique_data_capacity > 0 {
+where thread_count <= 4 && thread_count & 1 == 0 && (unique_data_capacity + unique_read_data_capacity) > 0 {
 
     when ODIN_DEBUG && DUMP{
-        append_csv("init_world", 0)
         append_csv("World address input w", QWORD(uintptr(world)))
         append_csv("thread_count constant r", QWORD(thread_count))
         append_csv("unique_data_count constant r", QWORD(unique_data_capacity))
         append_csv("unique_read_data_count constant r", QWORD(unique_read_data_capacity))
      }
-
 
     READ_WRITE : QWORD : 0x03
     PRIVATE_ANON : QWORD : 0x21
@@ -408,95 +439,103 @@ where thread_count <= 4 && thread_count & 1 == 0 && unique_data_capacity > 0 {
     ADVISE_POPULATE_WRITE : QWORD : 0x17
     ADVISE_COLLAPSE : QWORD : 0x19
     
+    buffer_address : uintptr = ---
 
     //The ColumnarBlock Allocation
-    {
-        buffer_address : uintptr = ---
+    {	
 
-        REQUIRED_HEADER_BYTES : QWORD : (size_of(ColumnarHeader) * (unique_data_capacity + unique_read_data_capacity) + 0xFFF) & 0xFFFFFFFFFFFFF000
+	when (unique_data_capacity & 0x7F) == 0{
+	    UNIQUE_RW_DATA_CAPACITY_GRANULARITY : QWORD : unique_data_capacity + 0x80
+	}else{
+	    UNIQUE_RW_DATA_CAPACITY_GRANULARITY : QWORD : (unique_data_capacity + 0x7F) & 0xFFFFFFFFFFFFFF80
+	}
 
-        REQUIRED_RW_BLOCK_BYTES : QWORD : (size_of(ColumnarBlock(thread_count)) * unique_data_capacity + 0x1FFFFF) & 0xFFFFFFFFFFE00000
-        REQUIRED_R_BLOCK_BYTES : QWORD : (size_of(ColumnarBlock(thread_count)) * unique_read_data_capacity + 0x1FFFFF) & 0xFFFFFFFFFFE00000
+	when (unique_read_data_capacity & 0x7F) == 0{
+	    UNIQUE_R_DATA_CAPACITY_GRANULARITY : QWORD : unique_read_data_capacity + 0x80
+	}else{
+	    UNIQUE_R_DATA_CAPACITY_GRANULARITY : QWORD : (unique_read_data_capacity + 0x7F) & 0xFFFFFFFFFFFFFF80
+	}
+
+	REQUIRED_RW_HEADER_BYTES : QWORD : size_of(ColumnarHeader) * UNIQUE_RW_DATA_CAPACITY_GRANULARITY
+	REQUIRED_R_HEADER_BYTES : QWORD : size_of(ColumnarHeader) * UNIQUE_R_DATA_CAPACITY_GRANULARITY
+
+        REQUIRED_RW_BLOCK_BYTES_2MIB : QWORD : size_of(ColumnarBlock) * UNIQUE_RW_DATA_CAPACITY_GRANULARITY 
+        REQUIRED_R_BLOCK_BYTES_2MIB : QWORD : size_of(ColumnarBlock) * UNIQUE_R_DATA_CAPACITY_GRANULARITY 
 
         //TODO:Khal read the syscall implementations to see what it actually does.
        
-        REQUIRED_COL_BYTES : QWORD : REQUIRED_RW_BLOCK_BYTES + REQUIRED_R_BLOCK_BYTES
+        REQUIRED_COL_BYTES_2MIB : QWORD : REQUIRED_RW_BLOCK_BYTES_2MIB + REQUIRED_R_BLOCK_BYTES_2MIB
+	REQUIRED_HEADER_BYTES_4KIB : QWORD : (REQUIRED_RW_HEADER_BYTES + REQUIRED_R_HEADER_BYTES + 0xFFF) & 0xFFFF_FFFF_FFFF_F000
+
+	UNUSED_PADDED_BYTES : QWORD : ((UNIQUE_RW_DATA_CAPACITY_GRANULARITY + UNIQUE_R_DATA_CAPACITY_GRANULARITY) - (unique_data_capacity + unique_read_data_capacity)) * size_of(ColumnarBlock)
+
+	//TODO:Khal relook at and re-architecture it.  
+	//TODO:Khal how will we handle over utilization of deffered operation from some thread, while other thread are under utilizing deffered operations?
+        REQUIRED_DS_OP_BYTES : QWORD : 4096 //assuming the op enum to be 1 byte so we can issue 4096 ops
+        
+	REQUIRED_DSO_BUFFER_BYTES : QWORD : 65536 //assuming limit of op struct to be 16 bytes so (65536 / 16) is 4096, so we can issue 4096 
+        TOTAL_REQUIRED_DEFFERED_OPS_BYTES : QWORD : REQUIRED_DS_OP_BYTES + REQUIRED_DSO_BUFFER_BYTES
+
+	//size sanity check
+	{
+		#assert((REQUIRED_RW_BLOCK_BYTES_2MIB  & 0x1FFF_FF) == 0)
+ 		#assert((REQUIRED_R_BLOCK_BYTES_2MIB & 0x1FFF_FF) == 0)
+		#assert((REQUIRED_COL_BYTES_2MIB  & 0x1FFF_FF) == 0)
+
+ 		#assert((REQUIRED_RW_HEADER_BYTES & 0x7FF) == 0)
+ 		#assert((REQUIRED_R_HEADER_BYTES & 0x7FF) == 0)
+		#assert((REQUIRED_HEADER_BYTES_4KIB & 0xFFF) == 0)
+
+ 		#assert(UNUSED_PADDED_BYTES > 0)
+ 		#assert(UNUSED_PADDED_BYTES % align_of(ColumnarBlock) == 0)	
+	}
 
         buffer_address = intrinsics.syscall(
             linux.SYS_mmap,
             0x00,
-            uintptr(REQUIRED_HEADER_BYTES),
+            uintptr(REQUIRED_HEADER_BYTES_4KIB),
             uintptr(READ_WRITE),
             uintptr(PRIVATE_ANON),
             ~uintptr(0),
             uintptr(0),
         )
-
 
         world.header = cast([^]ColumnarHeader)buffer_address
-        
+
         buffer_address = intrinsics.syscall(
             linux.SYS_mmap,
             0x00,
-            uintptr(REQUIRED_COL_BYTES),
+            uintptr(REQUIRED_COL_BYTES_2MIB),
             uintptr(READ_WRITE),
             uintptr(PRIVATE_ANON),
             ~uintptr(0),
             uintptr(0),
         )
 
-        //Page fault pages (we don't want to change the page meta eg. modified bit)
         intrinsics.syscall(
             linux.SYS_madvise,
             buffer_address,
-            uintptr(REQUIRED_COL_BYTES),
+            uintptr(REQUIRED_COL_BYTES_2MIB),
             uintptr(ADVISE_POPULATE_WRITE)
         )
+ 
+	world.columnar_blocks = cast([^]ColumnarBlock)(buffer_address + uintptr(UNUSED_PADDED_BYTES))
+
+	world.read_write_columnar_block_bytes = size_of(ColumnarBlock) * unique_data_capacity
+	world.read_columnar_block_bytes = size_of(ColumnarBlock) * unique_read_data_capacity
+
+	world.workspace = cast([^]BYTE)buffer_address
+	world.workspace_bytes_capacity = UNUSED_PADDED_BYTES
+
+	//Set the workspace and the query cache
+	//Workspace is a temporary Allocation and query cache is a fast cache for 
+	//same indices in multiple ColumnarBlock.
 
 
-        //THP support (collapse to 2mib pages)
-        intrinsics.syscall(
-            linux.SYS_madvise,
-            buffer_address,
-            uintptr(REQUIRED_COL_BYTES),
-            uintptr(ADVISE_COLLAPSE)
-        )
-        
-
-        world.columnar_blocks = cast([^]ColumnarBlock(thread_count))(buffer_address)
-        world.columnar_allocated_bytes = REQUIRED_COL_BYTES
-        world.read_offset_bytes = REQUIRED_RW_BLOCK_BYTES
-
-
-        fmt.println(uintptr(world.header), uintptr(world.columnar_blocks))
-
-        when ODIN_DEBUG && DUMP{
-            
-            append_csv("total_header_bytes local w", REQUIRED_HEADER_BYTES)
-            
-            append_csv("total_columnar_bytes local r", REQUIRED_COL_BYTES)
-            append_csv("total_size local w", REQUIRED_COL_BYTES+ REQUIRED_HEADER_BYTES)
-            
-            append_csv("buffer_address local w", QWORD(uintptr(buffer_address)))
-            append_csv("world_header_address input w", QWORD(uintptr(world.header)))
-            append_csv("world_columnar_table input w", QWORD(uintptr(world.columnar_blocks)))
-        }
-    }
-
-    
-    //The Deferred Operation Allocation
-    {
-        buffer_address : uintptr = ---
-        
-        REQUIRED_DS_OP_BYTES : QWORD : 4096 //assuming the op enum to be 1 byte so we can issue 4096 ops
-        REQUIRED_DSO_BUFFER_BYTES : QWORD : 131072 //assuming limit of op struct to be 32 bytes so (131072 / 32) is 4096, so we can issue 4096 
-
-        REQUIRED_TOTAL_BYTES : QWORD : REQUIRED_DS_OP_BYTES + REQUIRED_DSO_BUFFER_BYTES
-        
         buffer_address = intrinsics.syscall(
             linux.SYS_mmap,
             0x00,
-            uintptr(REQUIRED_TOTAL_BYTES),
+            uintptr(TOTAL_REQUIRED_DEFFERED_OPS_BYTES),
             uintptr(READ_WRITE),
             uintptr(PRIVATE_ANON),
             ~uintptr(0),
@@ -505,11 +544,19 @@ where thread_count <= 4 && thread_count & 1 == 0 && unique_data_capacity > 0 {
 
         world.ds_ops = cast([^]StructuralOperation)(buffer_address)
         world.dso_buffer = cast([^]BYTE)(buffer_address + uintptr(REQUIRED_DS_OP_BYTES))
-       
+
         when ODIN_DEBUG && DUMP{
+            append_csv("total_header_bytes local w", REQUIRED_HEADER_BYTES_4KIB)
+            
+            append_csv("total_columnar_bytes local r", REQUIRED_COL_BYTES_2MIB)
+            
+            append_csv("buffer_address local w", QWORD(uintptr(buffer_address)))
+            append_csv("world_header_address input w", QWORD(uintptr(world.header)))
+            append_csv("world_columnar_table input w", QWORD(uintptr(world.columnar_blocks)))
+
             append_csv("ds_op_bytes constant r", QWORD(REQUIRED_DS_OP_BYTES))
             append_csv("dso_buffer_bytes constant r", QWORD(REQUIRED_DSO_BUFFER_BYTES))
-            append_csv("total_size constant r", QWORD(REQUIRED_TOTAL_BYTES))
+            append_csv("total_size constant r", QWORD(TOTAL_REQUIRED_DEFFERED_OPS_BYTES))
             
             append_csv("buffer_address local w", QWORD(uintptr(buffer_address)))
             append_csv("world_ds_ops_address input w", QWORD(uintptr(world.ds_ops)))
@@ -518,159 +565,235 @@ where thread_count <= 4 && thread_count & 1 == 0 && unique_data_capacity > 0 {
     }
 
     
-    world.owner_thread_id = QWORD(intrinsics.syscall(linux.SYS_gettid))
+     //Filtering Engine
+    {
+	//TODO:Khal Filter parameter are currently _unused due do not knowing the layout and implementation yet.
+    }
 
-    when ODIN_DEBUG && DUMP{
-        append_csv("world_owner_thread_id input w", QWORD(world.owner_thread_id))
-    }    
+    //Main Synchronization
+    {
+	world.owner_thread_id = QWORD(intrinsics.syscall(linux.SYS_gettid))
+
+	//TODO:Khal World Sync parameter are currently _unused due do not knowing the layout and implementation yet.
+	when ODIN_DEBUG && DUMP{
+	    append_csv("world_owner_thread_id input w", QWORD(world.owner_thread_id))
+	} 
+    }
+
+    //Thread Synchronization
+    {
+	for thread_index in 0..<thread_count{
+		//TODO:Khal Thread Sync parameter are currently _unused due do not knowing the layout and implementation yet.
+	}
+    }
+
+
+    //Debug and Reflection
+    {
+	//TODO:Khal Debug & Reflection parameter are currently _unused due do not knowing the layout and implementation yet.
+    }
+    
 
 }
 
+@(optimization_mode="favor_size")
+lock_readonly_blocks :: proc(world : ^World($thread_count)){
 
-lock_readonly_component :: proc(world : ^World($thread_count)){
+    when ODIN_DEBUG && DUMP{
+	
+
+    }
+
     READONLY : QWORD : 0x01
+    ADVISE_COLLAPSE : QWORD : 0x19
+
+    readonly_columnar_address : uintptr = ---
+
+    readonly_columnar_address = uintptr(world.columnar_blocks) + uintptr(world.read_write_columnar_block_bytes)
 
     intrinsics.syscall(
         linux.SYS_mprotect,
-        uintptr(world.columnar_blocks) + uintptr(world.read_offset_bytes),
-        uintptr(world.columnar_allocated_bytes - world.read_offset_bytes),
+	readonly_columnar_address,
+	uintptr(world.read_columnar_block_bytes),
         uintptr(READONLY),
+    )
+
+    intrinsics.syscall(
+	linux.SYS_madvise,
+	readonly_columnar_address,
+        uintptr(world.read_columnar_block_bytes),
+        uintptr(ADVISE_COLLAPSE)
     )
 }
 
-
-/*
+//We need to distinguish read and read and write pages. We can encode that to table_index or we can pass another constant parameter
 @(optimization_mode="favor_size")
-register_columnar :: proc(world : ^World($thread_count), $data_typeid : typeid, $table_index : QWORD, $start : DWORD, $end : DWORD)
-where intrinsics.type_is_struct(data_typeid) && end > start && thread_count <= 4 && thread_count & 1 == 0 && size_of(data_typeid) > 4 #no_bounds_check{
-
+register_columnar :: proc(world : ^World($thread_count), $data_typeid : typeid, $table_index : QWORD, $read_only : DWORD, $start_indice : DWORD, $number_of_components : DWORD)
+where intrinsics.type_is_struct(data_typeid) && size_of(data_typeid) >= 8 && start_indice >= 0 && number_of_components > 0 #no_bounds_check{
+	
     when ODIN_DEBUG && DUMP{
-        
         append_csv("register_columnar", 0)
         append_csv("world_address input rw", QWORD(uintptr((world))))
         append_csv("thread_count constant r", QWORD(thread_count))
         append_csv("data_size constant r", size_of(data_typeid))
         append_csv("data_alignment constant r", align_of(data_typeid))
         append_csv("table_index constant r", table_index)
-        append_csv("start_constant r", QWORD(start))
-        append_csv("end constant r", QWORD(end))
+	append_csv("read_only constant r", QWORD(read_only))
+        append_csv("start_indice r", QWORD(start_indice))
+        append_csv("number_of_components r", QWORD(number_of_components))
     }
-    
-    when intrinsics.type_struct_has_implicit_padding(data_typeid){
-        LANE_COUNT : DWORD : 1
-        LANE_MASK : WORD : SCALAR
+
+    DATA_TYPEID_FIELD_COUNT : QWORD : intrinsics.type_struct_field_count(data_typeid)
+    PAYLOAD_MAX_BYTES_SIZE : DWORD : 4032
+
+    struct_padding_offset : DWORD 
+
+    when (number_of_components & 3) == 0{
+	NUMBER_OF_INDICES_PER_COLUMNAR : DWORD : number_of_components >> 2 
     }else{
-        FIELD_IS_UNIFORM : bool : (align_of(data_typeid) * intrinsics.type_struct_field_count(data_typeid)) == size_of(data_typeid)
-        
-        when FIELD_IS_UNIFORM{
-            ELEMENT_SIZE : DWORD : size_of(data_typeid) / intrinsics.type_struct_field_count(data_typeid)
-
-            //We are currently using YMM SIMD 256
-            when ELEMENT_SIZE == 8{
-                LANE_COUNT : DWORD : 4
-                LANE_MASK : DWORD : SIMD_4
-            }else when ELEMENT_SIZE == 4{
-                LANE_COUNT : DWORD : 8
-                LANE_MASK : DWORD : SIMD_8
-            }else {
-                LANE_COUNT : DWORD : 1
-                LANE_MASK : DWORD : SCALAR
-            }
-            
-        }else{
-            LANE_COUNT : DWORD : 1
-            LANE_MASK : DWORD : SCALAR
-        }
+	NUMBER_OF_INDICES_PER_COLUMNAR : DWORD : ((number_of_components + 0x03) & 0xFFFF_FFFC) >> 2
     }
 
-    INDICES_CAPACITY : DWORD : end - start
-
-    SIMD_PADDED_INDICES_CAPACITY : DWORD : (INDICES_CAPACITY + LANE_COUNT - 0x01) / LANE_COUNT * LANE_COUNT
-    REQUIRED_SIMD_RAW_BYTES : DWORD : size_of(data_typeid) * SIMD_PADDED_INDICES_CAPACITY
-            
-    CACHE_ALIGNED_RAW_BYTES : DWORD : DWORD(QWORD(REQUIRED_SIMD_RAW_BYTES + 0x3F) & 0xFFFFFFFFFFFFFFC0)
-    OCCUPIED_CACHE_LINE : DWORD : CACHE_ALIGNED_RAW_BYTES / 0x40
-            
-    EVEN_DISTRIBUTED_CACHE_LINE : DWORD : (OCCUPIED_CACHE_LINE + thread_count - 1) / thread_count * thread_count
-    TARGET_RAW_BYTES : DWORD : EVEN_DISTRIBUTED_CACHE_LINE * 0x40
-    
-    TARGET_STRUCT_COUNT : DWORD : TARGET_RAW_BYTES / size_of(data_typeid)
-
-    when ODIN_DEBUG && DUMP{
-        append_csv("lane_count constant r", QWORD(LANE_COUNT))
-        append_csv("lane_mask constant r", QWORD(LANE_MASK))
-        
-        append_csv("indices_capacity constant r", QWORD(INDICES_CAPACITY))
-        
-        append_csv("simd_indices_capcity constant r", QWORD(SIMD_PADDED_INDICES_CAPACITY))
-        append_csv("required_soa_aos_bytes constant r", QWORD(REQUIRED_SIMD_RAW_BYTES))
-        
-        append_csv("cacheline_aligned_soa_aos_bytes constant r", QWORD(CACHE_ALIGNED_RAW_BYTES))
-        append_csv("occupying cacheline constant r", QWORD(OCCUPIED_CACHE_LINE))
-        
-        append_csv("even cacheline constant r", QWORD(EVEN_DISTRIBUTED_CACHE_LINE))
-        append_csv("required_target_bytes constant r", QWORD(TARGET_RAW_BYTES))
-        
-        append_csv("required_target_byter_per_core constant r", QWORD(TARGET_RAW_BYTES) / 4)
-        append_csv("required_data_count constant r", QWORD(TARGET_STRUCT_COUNT))
-    }
+    //We are checking if the number of component bytes, which are divided up to the four columnar page
+    //are less than the max columnar payload size (4032) bytes. Otherwise it is an overflow.
+    #assert((NUMBER_OF_INDICES_PER_COLUMNAR * size_of(data_typeid)) < PAYLOAD_MAX_BYTES_SIZE)
 
 
     {
+	types : [^]^runtime.Type_Info = ---
+	
+	types = type_info_of(data_typeid).variant.(runtime.Type_Info_Named).base.variant.(runtime.Type_Info_Struct).types
+	
+	for i in 0..<DATA_TYPEID_FIELD_COUNT{
+	    struct_padding_offset += (0x40 - DWORD(types[i].size)) 	
+	}
 
-        FULL_MASK_QWORD : QWORD : QWORD(TARGET_STRUCT_COUNT >> 6)
-        REMAINING_MASK_BITS : DWORD : TARGET_STRUCT_COUNT & 63
-
-
-        ENABLED_DATA_BIT_MASK : BYTE : (1 << FULL_MASK_QWORD) - 1
-        when REMAINING_MASK_BITS != 0{
-            DISABLED_DATA_BIT_MASK : BYTE : ~(ENABLED_DATA_BIT_MASK) - 1
-        }else{
-            DISABLED_DATA_BIT_MASK : BYTE : ~ENABLED_DATA_BIT_MASK
-        }
-        
-        bit_zero_mask_address : uintptr = ---
-
-        world.header[table_index] = {
-            size_of(data_typeid),
-            start,
-            TARGET_STRUCT_COUNT + start,
-            THREAD_LOCAL | STRUCTURAL_CHANGE | INPUT_OUTPUT | LANE_MASK,
-        }
-        
-        world.query_block_mask[table_index] = {
-            ENABLED_DATA_BIT_MASK,
-            DISABLED_DATA_BIT_MASK
-        }
-
-        bit_zero_mask_address = uintptr(world.columnar_table) + uintptr(table_index * size_of(ColumnarPage))
-
-        when ODIN_DEBUG && DUMP{
-            append_csv("full_mask_qword constant r", QWORD(FULL_MASK_QWORD))
-            append_csv("remaining_mask_bit_remaining constant r", QWORD(REMAINING_MASK_BITS))
-            
-            append_csv("enabled_data_bit_mask constant r", QWORD(ENABLED_DATA_BIT_MASK))
-            append_csv("disabled_data_bit_mask constant r", QWORD(DISABLED_DATA_BIT_MASK))
-            
-            append_csv("header_target_end local w", QWORD(TARGET_STRUCT_COUNT + start))
-            append_csv("header_target_flag local w", QWORD(THREAD_LOCAL | STRUCTURAL_CHANGE | INPUT_OUTPUT | LANE_MASK))
-
-            append_csv("bit_zero_mask_address local rw", QWORD(bit_zero_mask_address))
-        }
-
-        when FULL_MASK_QWORD > 0{
-            for i in 0..<FULL_MASK_QWORD{
-                (cast([^]QWORD)bit_zero_mask_address)[i] = ~QWORD(0)
-            }
-        }
-
-        (cast([^]QWORD)bit_zero_mask_address)[FULL_MASK_QWORD] = (1 << REMAINING_MASK_BITS) - 1
     }
+    
+
+    //TODO:Khal we need to get the fields from the struct once we get each field we need to get it's alignment.
+    //we than need to divide 0x40 / alignment for each field and sum the result.
+    //we than need to get the field count of the struct and multiply it by 0x40.
+    //We than need to get the different between (field_count * 0x40) / (0x40 / each_field_alignment) 
+    //that will be the remaining_data_stride in the ColumnarHeader of that specific data type.
+    //Do we need to get the alignment or the size???? and this will just help end of struct alignment not field alignment.
+
+
+
+
+
+    /*
+    when size_of(data_typeid) > 1 && align_of(data_typeid) == 1{
+	//The user used #packed directive. Refection is need to fetch the highest field size. 
+	type_info_ptr : ^runtime.Type_Info = ---
+	struct_info : runtime.Type_Info_Struct = ---
+	largest_field_size : DWORD = 0
+
+	type_info_ptr = type_info_of(data_typeid).variant.(runtime.Type_Info_Named).base
+	struct_info = type_info_ptr.variant.(runtime.Type_Info_Struct)
+
+	for i in 0..<DATA_TYPEID_FIELD_COUNT{
+		type_info_ptr = struct_info.types[i]
+
+		if largest_field_size < DWORD(type_info_ptr.size){
+			largest_field_size = DWORD(type_info_ptr.size)
+		}
+	}
+
+	array_size = 0x40 / largest_field_size
+
+    }else{
+	array_size = 0x40 / align_of(data_typeid)
+    }
+    */
+ 
+    //Logic goes here.
+
+ 
+
+    //Assignment goes here.
+    when read_only != 0{
+	 	world.header[table_index] = {
+		0,
+		start_indice,
+		NUMBER_OF_INDICES_PER_COLUMNAR,
+		struct_padding_offset,
+	}
+    }else{
+	
+	world.readonly_header[table_index] = {
+		0,
+		start_indice,
+		NUMBER_OF_INDICES_PER_COLUMNAR,
+		struct_padding_offset,
+	}
+    }
+
+    //TODO:Khal we must set the specfic ColumnarHeader's query_mask and the specific ColumnarPage's bit_zero_mask field in the ColumnarBlock
+    when ODIN_DEBUG && DUMP{
+	
+
+    }
+
+
+}
+
+
+@(optimization_mode="favor_size")
+compute_struct_wasted_space :: #force_inline proc (world : ^World($thread_count), $table_index : QWORD) -> f32{
+	struct_padding : DWORD = ---
+	cacheline_struct_bytes : DWORD = ---
+	struct_padding = world.header[table_index].struct_padding_offset
+	cacheline_struct_bytes = (struct_padding + 0x3F) & 0xFFFF_FFC0
+
+	if b32(struct_padding | cacheline_struct_bytes){ 
+	    return f32(struct_padding) / f32(cacheline_struct_bytes) * 100.0 
+	}
+
+	return 0
 }
 
 
 
+   /*
+      How will we have invariant on SIMD alignment for the payload bytes. How can we guarentee SIMD alignment. Even on different size field struct. Should it be Implicit (Where it adds padding to guarentee alignment) or should it be Explict (Where it up to the user struct layout that determine alignment). This will break the invariant.
+ 	#Solution we can create a function that will guarentee the alignment to allow SIMD operation.
+	This may need to handle field alignment and end of struct alignment.
+	We can do this by implementing alignment on simd_load and simd_store function.
 
+     */
+
+
+
+
+//TODO:Khal make this better.
+simd_load :: #force_inline proc "contextless" (array : $A/[$LANE]$E) -> #simd[LANE]E{
+	//TODO:Khal we will load 64 bytes chunk so u8 lane will be 64 and u16 will be 32, etc...
+	return transmute(#simd[LANE]E)array
+
+}
+
+
+simd_store :: proc{simd_store_simd, simd_store_array}
+
+
+@(enable_target_feature="avx,avx2")
+simd_store_simd :: #force_inline proc "contextless" (slice : [^]$E, value : #simd[$LANE]E){
+	//TODO:Khal we need to align the since to be aligned to 64 byte boundary
+	//and possibly make the $LANE to by 64 / size_of(E), so u8 is 64, u16 is 32, u32 is 16, u64 is 8.
+	(cast(^#simd[LANE]E)slice)^ = value
+}
+
+
+@(enable_target_feature="avx,avx2")
+simd_store_array :: #force_inline proc "contextless" (slice : [^]$E, value : $A/[$LANE]E){
+
+	(cast(^#simd[LANE]E)slice)^ = simd_load(value)
+}
+
+
+
+/*
 brief informal statement of the problem:
 We need to support filtering multiple instances of a single component type based on their fields or flags  
 
@@ -1164,10 +1287,11 @@ update :: proc(){
  //Used for testing. Remove when fully implemented.
 @(enable_target_feature="avx,avx2")
 main :: proc(){
-
+	
      HEALTH_STORAGE_INDEX :: 0
      NPC_POSITION_STORAGE_INDEX :: 1
      ENEMY_POSITION_STORAGE_INDEX :: 2
+     PACKED_DIRECTIVE_STORAGE_INDEX :: 3
 
      PropData :: struct{
          foo : QWORD,
@@ -1180,23 +1304,61 @@ main :: proc(){
 		 val : f32,
 	 }
 
-     Position :: struct{
-         x : f32,
-         y : f32,
-	 z : f32
+     Position :: struct {
+         x : DWORD,
+         y : DWORD,
+	 z : BYTE,
+	 //padding : [3]BYTE,
      }
 
-     
-     player_position : Position = {5, 7, 2}
      player_health : Health = {100}
 
-  	 world : World(4) = ---
 
-    init_world(&world, 28,5)
+     @(enable_target_feature="avx,avx2")
+     foo_proc :: proc "contextless" (name : [^]#soa[16]Position){
+
+	     a : #simd[16]DWORD = {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
+
+	     b : #simd[16]DWORD = {2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2}
+	     simd_store(raw_data(name[0].y[:]),a)
+	     
+	     position_y := simd_load(name[0].y)
+	     simd_store(raw_data(name[0].x[:]), a+position_y)
+	     //position_z := simd_load(name[0].z)
+
+	     //position_x^ = {3,3,3,3}
+	     
+     }
+
+     //
+
+
+    f : Foo = Foo{}
+    world : World(4) = ---
+
+    init_world(&world, 129,5)
+
+     p := transmute([^]#soa[16]Position)(raw_data(world.columnar_blocks[0].block[0].payload[:]))
+
+     //fmt.println(world.columnar_blocks[0].block[0].payload[0:128])
+
+     a : Lambda(Position) = ---
+     a.call = foo_proc
+     a.call(p)
+
      
-     //Register (NPC) Position "component" in the world. 
-     //register_columnar(&world, Position, NPC_POSITION_STORAGE_INDEX, 21, 300)
-     //register_columnar(&world, Position,ENEMY_POSITION_STORAGE_INDEX, 0, 19)
+     //fmt.println("size of lambda ", size_of(Lambda(Position)), align_of(Lambda(Position)))
+
+     //fmt.println(world.columnar_blocks[0].block[0].payload[0:128])
+    lock_readonly_blocks(&world)
+    
+    //Register (NPC) Position "component" in the world. 
+    //register_columnar(&world, Position, NPC_POSITION_STORAGE_INDEX, 0x01, 21, 301)
+    register_columnar(&world, Foo, PACKED_DIRECTIVE_STORAGE_INDEX, 0x01, 5, 19)
+    waste := compute_struct_wasted_space(&world, PACKED_DIRECTIVE_STORAGE_INDEX) 
+    fmt.println("waste, ", waste)
+    /*
+
      
      readjust_npc_position :: proc "contextless" (buf : [^]BYTE, meta : DataMeta){
          data : [^]#soa[8]Position = transmute([^]#soa[8]Position)buf
@@ -1611,4 +1773,5 @@ main :: proc(){
      //Run
      //Sync
      //Deferred operation (recylce entities)
- }
+     */
+}
