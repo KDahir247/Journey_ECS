@@ -1,4 +1,11 @@
 # Journey_ECS
+
+## Core principle
+
+
+
+
+
 ## ECS Query / Filter / Execution Pipeline
 
 Component that fail in the query_mask (coarse), bit_zero_mask (granular), Indices Querying (eg. has Position + Rotation),Component Filtering (Position.x > 5 AND Rotation.yaw > 0.5) will exit early if possible. The only way it will exit is if there is no lanes available (Mask is 0 meaning no components) otherwise it will go through each step.
@@ -102,4 +109,19 @@ Component that fail in the query_mask (coarse), bit_zero_mask (granular), Indice
                         COMPONENT DATA
 
 ```
+
+## Multi Threading
+
+
+
+## Deferred Operations
+
+
+
+## Reflection and Tracking
+
+
+## Serialization
+
+
 *Pull request, Issues, Contribution and Discussion on the design and implementation on the Journey_ECS is welcomed.*
