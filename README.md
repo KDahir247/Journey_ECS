@@ -50,7 +50,8 @@ it will be redundant.
                                eg.
                   WHERE Pos.x > 0 AND Pos.x > 5
                  Will get converted to Pos.x > 5
-              It will get all Pos that satisfy condition  
+              It will get all Pos that satisfy condition
+            by using SIMD refer to SYSTEM on how data is store  
                                │
                                ▼
                    ┌────────────────────────┐
