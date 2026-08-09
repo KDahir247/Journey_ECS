@@ -1,8 +1,7 @@
 # Journey_ECS
 ## ECS Query / Filter / Execution Pipeline
-TODO: If a step fails for example if the query_mask for bit 0 (first 64 component) is disabled can it end early to avoid the other steps and can each step end early, since
-it will be redundant.
 
+Component that fail in the query_mask (coarse), bit_zero_mask (granular), Indices Querying (eg. has Position + Rotation),Component Filtering (Position.x > 5 AND Rotation.yaw > 0.5) will exit early if possible. The only way it will exit is if there is no lanes available (Mask is 0 meaning no components) otherwise it will go through each step.
 
 
 ```text
