@@ -8,7 +8,7 @@
 
 ## ECS Query / Filter / Execution Pipeline
 
-Component that fail in the query_mask (coarse), bit_zero_mask (granular), Indices Querying (eg. has Position + Rotation),Component Filtering (Position.x > 5 AND Rotation.yaw > 0.5) will exit early if possible. The only way it will exit is if there is no lanes available (Mask is 0 meaning no components) otherwise it will go through each step.
+Component that fail in the query_mask (coarse), bit_zero_mask (granular), Indices Querying (eg. has Position + Rotation),Component Filtering (Position.x > 5 AND Rotation.yaw > 0.5) will exit early if possible.
 
 There will be no structural changes that will happen to the data layout in the ColumnarBlock (base struct to hold components) if any component fails or succeeds in the final result. This mean there will be no swapping, removing, inserting or any other change in each step of the Execution pipeline. It will do this by doing a final blend
 from the modified component (through the system) and the original component using a mask, which is very similar to a SIMD blendv operation.
