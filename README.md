@@ -59,7 +59,29 @@ from the modified component (through the system) and the original component usin
                   WHERE Pos.x > 0 AND Pos.x > 5
                  Will get converted to Pos.x > 5
               It will get all Pos that satisfy condition
-            by using SIMD refer to SYSTEM on how data is store  
+            by using SIMD refer to SYSTEM on how data is store
+                              |
+                   ┌────────────────────────┐
+                   │     FINAL MASK         │
+                   │                        │
+                   │ coarse                 │
+                   │      &                 │
+                   │ granular               │
+                   │      &                 |
+                   │ group                  |
+                   │      &                 |  
+                   │ filter                 │
+                   │      &                 │
+                   │ operation              │
+                   └───────────┬────────────┘
+                               │
+                   ┌────────────────────────┐
+                   |                        |
+                   │  Skip Pages or Block   │
+                   │   Depending on mask    │
+                   | eg if 4096 bits are 0  |
+                   |     skip the Page      | 
+                   └───────────┬────────────┘
                                │
                                ▼
                    ┌────────────────────────┐
@@ -83,20 +105,6 @@ from the modified component (through the system) and the original component usin
                    └───────────┬────────────┘
                                │
                                ▼
-                   ┌────────────────────────┐
-                   │     FINAL MASK         │
-                   │                        │
-                   │ coarse                 │
-                   │      &                 │
-                   │ granular               │
-                   │      &                 |
-                   │ group                  |
-                   │      &                 |  
-                   │ filter                 │
-                   │      &                 │
-                   │ operation              │
-                   └───────────┬────────────┘
-                               │
                        ┌───────┴───────┐
                        │               │
                     simd mask = 1   simd mask = 0
