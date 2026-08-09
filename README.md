@@ -1,5 +1,8 @@
 # Journey_ECS
 ## ECS Query / Filter / Execution Pipeline
+TODO: If a step fails for example if the query_mask for bit 0 (first 64 component) is disabled can it end early to avoid the other steps and can each step end early, since
+it will be redundant.
+
 
 
 ```text
